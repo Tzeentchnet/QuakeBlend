@@ -7,7 +7,7 @@ tagline = "Import Quake 1/2/3 maps, BSPs, and texture archives"
 maintainer = "QuakeBlend Contributors"
 type = "add-on"
 
-website = "https://github.com/quakeblend/quakeblend"
+website = "https://github.com/Tzeentchnet/QuakeBlend"
 
 tags = ["Import-Export"]
 

@@ -2,6 +2,8 @@
 
 Blender 5.0+ extension for importing **Quake 1, 2, and 3** map data and textures.
 
+Repository: <https://github.com/Tzeentchnet/QuakeBlend>
+
 ## Status
 
 | Phase | Scope | Status |
@@ -15,14 +17,28 @@ Blender 5.0+ extension for importing **Quake 1, 2, and 3** map data and textures
 
 Export is **explicitly out of scope** for this initial release.
 
-## Install (from source)
+## Install
 
-1. Build the extension zip:
-   ```powershell
-   pwsh ./scripts/build_extension.ps1
-   ```
-2. In Blender 5.0+ open *Edit → Preferences → Get Extensions → Install from Disk*
-   and pick `dist/quakeblend-*.zip`.
+### From a release zip
+
+Grab `quakeblend-*.zip` from the
+[Releases](https://github.com/Tzeentchnet/QuakeBlend/releases) page (or build
+your own — see below), then in Blender 5.0+ open
+*Edit → Preferences → Get Extensions → ⌄ menu → Install from Disk* and pick
+the zip.
+
+### From source
+
+```powershell
+git clone https://github.com/Tzeentchnet/QuakeBlend.git
+cd QuakeBlend
+pwsh ./scripts/build_extension.ps1
+```
+
+The build script writes `dist/quakeblend-<version>.zip`. If the
+`BLENDER_EXE` environment variable points at a Blender executable the
+official `blender --command extension build` is used; otherwise it falls
+back to `Compress-Archive`.
 
 ## Usage
 
@@ -74,6 +90,13 @@ python -m pytest
 
 The test suite exercises only the `formats` layer (30 tests).
 Manual Blender smoke tests are listed above.
+
+## Contributing
+
+Issues and pull requests welcome at
+<https://github.com/Tzeentchnet/QuakeBlend>. Please keep the strict layer
+separation: anything under `quakeblend/formats/` must remain importable
+without `bpy` so it can run under plain `pytest`.
 
 ## License
 

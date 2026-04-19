@@ -41,7 +41,9 @@ $staging = Join-Path ([System.IO.Path]::GetTempPath()) ("quakeblend-build-" + [g
 New-Item -ItemType Directory -Path $staging | Out-Null
 try {
     Copy-Item -Path $manifest -Destination $staging
-    Copy-Item -Path (Join-Path $root "quakeblend") -Destination $staging -Recurse
+    # Blender Extensions expect the package contents at the zip root, not
+    # nested inside a subfolder. Copy quakeblend/* directly.
+    Copy-Item -Path (Join-Path $root "quakeblend\*") -Destination $staging -Recurse
     if (Test-Path (Join-Path $root "LICENSE")) {
         Copy-Item -Path (Join-Path $root "LICENSE") -Destination $staging
     }
