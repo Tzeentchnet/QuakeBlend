@@ -13,8 +13,10 @@ from __future__ import annotations
 
 
 def _modules():
-    from .blender import importer_bsp, importer_map, importer_wad, prefs, ui
-    return (prefs, importer_map, importer_bsp, importer_wad, ui)
+    from .blender import (
+        exporter_map, importer_bsp, importer_map, importer_wad, prefs, ui,
+    )
+    return (prefs, importer_map, importer_bsp, importer_wad, exporter_map, ui)
 
 
 def register() -> None:

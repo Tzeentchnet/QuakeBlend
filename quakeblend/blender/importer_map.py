@@ -7,7 +7,7 @@ import os
 import bpy
 from bpy_extras.io_utils import ImportHelper
 
-from ..utils.constants import DEFAULT_IMPORT_SCALE
+from ..utils.constants import DEFAULT_IMPORT_SCALE, DEFAULT_PATCH_LEVEL
 
 
 class IMPORT_OT_quake_map(bpy.types.Operator, ImportHelper):
@@ -53,6 +53,13 @@ class IMPORT_OT_quake_map(bpy.types.Operator, ImportHelper):
     import_lights: bpy.props.BoolProperty(  # type: ignore[valid-type]
         name="Import lights",
         default=True,
+    )
+    patch_level: bpy.props.IntProperty(  # type: ignore[valid-type]
+        name="Patch tessellation level",
+        description="Q3 patch subdivision (segments per Bezier span)",
+        default=DEFAULT_PATCH_LEVEL,
+        min=1,
+        max=16,
     )
 
     def execute(self, context: bpy.types.Context) -> set[str]:

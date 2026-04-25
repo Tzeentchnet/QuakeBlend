@@ -82,8 +82,10 @@ def _build_node_tree(mat: bpy.types.Material, color_image: bpy.types.Image,
     bsdf = nt.nodes.new("ShaderNodeBsdfPrincipled")
     bsdf.location = (0, 0)
     bsdf.inputs["Roughness"].default_value = 1.0
-    bsdf.inputs["Specular IOR Level"].default_value = 0.0 \
-        if "Specular IOR Level" in bsdf.inputs else 0.0
+    if "Specular IOR Level" in bsdf.inputs:
+        bsdf.inputs["Specular IOR Level"].default_value = 0.0
+    elif "Specular" in bsdf.inputs:
+        bsdf.inputs["Specular"].default_value = 0.0
 
     tex = nt.nodes.new("ShaderNodeTexImage")
     tex.location = (-400, 0)

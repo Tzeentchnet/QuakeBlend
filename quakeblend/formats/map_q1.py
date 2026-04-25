@@ -56,10 +56,19 @@ class TexInfo:
     surface_flags: int = 0
     contents: int = 0
     value: int = 0
+    # Q3 brushDef3 2×3 texture matrix (None unless this came from brushDef3).
+    # Stored as ((a, b, c), (d, e, f)); see ``quakeblend.formats.brushdef3``.
+    tex_matrix: Optional[
+        tuple[tuple[float, float, float], tuple[float, float, float]]
+    ] = None
 
     @property
     def is_valve220(self) -> bool:
         return self.s_axis is not None and self.t_axis is not None
+
+    @property
+    def is_brushdef3(self) -> bool:
+        return self.tex_matrix is not None
 
 
 @dataclass(frozen=True)
@@ -205,13 +214,13 @@ def _parse_face(t: _Tokenizer) -> MapFace:
         xs = float(t.next())
         ys = float(t.next())
 
-    # Q2 trailing tokens are optional and numeric.
-    surface = contents = value = 0
-    while True:
+    # Q2 trailing tokens are optional and numeric: ``contents surface_flags value``.
+    # See ``map_q2.py`` for the canonical order; matches Quake 2 ``.map`` syntax.
+    trailing: list[int] = []
+    while len(trailing) < 3:
         peek = t.peek()
         if peek is None or peek in "({[":
             break
-        # Look ahead one token; if it's not a plain number, stop.
         save = t.i
         try:
             tok = t.next()
@@ -219,16 +228,10 @@ def _parse_face(t: _Tokenizer) -> MapFace:
         except (ValueError, IndexError):
             t.i = save
             break
-        # Accept up to three trailing ints.
-        if surface == 0 and contents == 0 and value == 0:
-            surface = num
-        elif contents == 0 and value == 0:
-            contents = num
-        elif value == 0:
-            value = num
-        else:
-            t.i = save
-            break
+        trailing.append(num)
+    contents = trailing[0] if len(trailing) >= 1 else 0
+    surface = trailing[1] if len(trailing) >= 2 else 0
+    value = trailing[2] if len(trailing) >= 3 else 0
 
     if s_axis is not None and t_axis is not None:
         tex = TexInfo(

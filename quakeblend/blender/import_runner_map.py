@@ -6,7 +6,7 @@ from pathlib import Path
 
 import bpy
 
-from ..formats import map_q1, palette as palette_mod, patch as patch_mod, wad as wad_mod
+from ..formats import map_q1, palette as palette_mod, patch as patch_mod, wad as wad_mod, wal as wal_mod
 from ..formats.csg import BrushFace, brush_faces
 from . import builder_entities, builder_geometry, builder_materials
 from .prefs import get_prefs
@@ -27,6 +27,89 @@ def _load_wad_materials(wad_paths: list[Path]) -> dict[str, bpy.types.Material]:
     return out
 
 
+def _resolve_texture_root(operator: bpy.types.Operator,
+                          context: bpy.types.Context) -> Path | None:
+    """Use the operator's texture_root if set, else the addon preference."""
+    raw = (getattr(operator, "texture_root", "") or "").strip()
+    if not raw:
+        try:
+            raw = (get_prefs(context).default_texture_root or "").strip()
+        except (KeyError, AttributeError):
+            raw = ""
+    return Path(raw) if raw else None
+
+
+_Q3_TEXTURE_EXTS = (".tga", ".jpg", ".jpeg", ".png")
+
+
+def _resolve_external_texture(texture_root: Path, name: str) -> tuple[Path, str] | None:
+    """Find an external texture under ``texture_root``.
+
+    Returns ``(path, kind)`` where ``kind`` is ``"wal"`` or ``"image"``, or ``None``.
+    Searches both directly under the root and under a ``textures/`` subfolder, and
+    falls back to a case-insensitive recursive walk.
+    """
+    # Direct WAL candidates (Quake 2).
+    wal_candidates = [
+        texture_root / f"{name}.wal",
+        texture_root / "textures" / f"{name}.wal",
+    ]
+    for cand in wal_candidates:
+        if cand.exists():
+            return cand, "wal"
+    # Direct image candidates (Quake 3).
+    base = texture_root / name
+    for ext in _Q3_TEXTURE_EXTS:
+        cand = base.with_suffix(ext)
+        if cand.exists():
+            return cand, "image"
+    if base.exists() and base.suffix.lower() in _Q3_TEXTURE_EXTS:
+        return base, "image"
+    # Case-insensitive walk fallback for WAL.
+    needle = (name + ".wal").lower().replace("\\", "/")
+    if texture_root.exists():
+        for path in texture_root.rglob("*.wal"):
+            try:
+                rel = str(path.relative_to(texture_root)).lower().replace("\\", "/")
+            except ValueError:
+                continue
+            if rel.endswith(needle) or rel == needle:
+                return path, "wal"
+    return None
+
+
+def _material_for_external(name: str, info: tuple[Path, str],
+                           q2_palette: palette_mod.Palette) -> bpy.types.Material | None:
+    path, kind = info
+    if kind == "wal":
+        try:
+            wal = wal_mod.read_wal_path(path)
+        except (OSError, ValueError):
+            return None
+        return builder_materials.material_from_wal(wal, q2_palette)
+    # image (Q3-style)
+    mat = bpy.data.materials.get(name)
+    if mat is not None:
+        return mat
+    mat = bpy.data.materials.new(name)
+    mat.use_nodes = True
+    nt = mat.node_tree
+    nt.nodes.clear()
+    output = nt.nodes.new("ShaderNodeOutputMaterial")
+    bsdf = nt.nodes.new("ShaderNodeBsdfPrincipled")
+    bsdf.inputs["Roughness"].default_value = 1.0
+    nt.links.new(bsdf.outputs[0], output.inputs[0])
+    try:
+        img = bpy.data.images.load(str(path), check_existing=True)
+        tex_node = nt.nodes.new("ShaderNodeTexImage")
+        tex_node.image = img
+        tex_node.interpolation = "Closest"
+        nt.links.new(tex_node.outputs["Color"], bsdf.inputs["Base Color"])
+    except RuntimeError:
+        pass
+    return mat
+
+
 def run(operator: bpy.types.Operator, context: bpy.types.Context, filepath: str) -> None:
     scale = float(getattr(operator, "scale", 1.0 / 32.0))
     wad_paths_str: str = getattr(operator, "wad_paths", "") or ""
@@ -37,6 +120,8 @@ def run(operator: bpy.types.Operator, context: bpy.types.Context, filepath: str)
             wad_paths_str = ""
     wad_paths = [Path(p) for p in wad_paths_str.split(";") if p.strip()]
     materials = _load_wad_materials(wad_paths)
+    texture_root = _resolve_texture_root(operator, context)
+    q2_palette = palette_mod.load_bundled("q2") if texture_root is not None else None
     map_path = Path(filepath)
 
     mf = map_q1.parse_path(map_path)
@@ -44,6 +129,28 @@ def run(operator: bpy.types.Operator, context: bpy.types.Context, filepath: str)
     scene = context.scene
     root = bpy.data.collections.new(map_path.stem)
     scene.collection.children.link(root)
+
+    # Cache the source path + detected game so the export operator can later
+    # re-parse the original file as its source of truth.
+    root["qb_source_map"] = str(map_path.resolve())
+    name_lower = map_path.name.lower()
+    if "q3" in name_lower or "quake3" in name_lower:
+        source_game = "q3"
+    elif "q2" in name_lower or "quake2" in name_lower:
+        source_game = "q2"
+    else:
+        source_game = "q1"
+    # Also derive from brush content (presence of brushDef3/patchDef2 ⇒ q3).
+    if any(b.raw_kind in ("brushDef3", "brushDef", "patchDef2", "patchDef3")
+           for ent in mf.entities for b in ent.brushes):
+        source_game = "q3"
+    root["qb_source_game"] = source_game
+    root["qb_source_projection"] = (
+        "valve220" if any(face.tex.is_valve220
+                          for ent in mf.entities for b in ent.brushes
+                          for face in b.faces)
+        else "standard"
+    )
 
     for ent_idx, entity in enumerate(mf.entities):
         classname = entity.properties.get("classname", f"entity_{ent_idx}")
@@ -66,8 +173,16 @@ def run(operator: bpy.types.Operator, context: bpy.types.Context, filepath: str)
             # Attach metadata so the geometry builder can compute UVs.
             enriched: list[BrushFace] = []
             for csg, src in zip(csg_faces, brush.faces):
+                tex_name = src.tex.name
+                # On-demand external texture resolution (Q2 WAL / Q3 image).
+                if tex_name not in materials and texture_root is not None:
+                    info = _resolve_external_texture(texture_root, tex_name)
+                    if info is not None:
+                        mat = _material_for_external(tex_name, info, q2_palette)
+                        if mat is not None:
+                            materials[tex_name] = mat
                 tex_size = (64, 64)
-                mat = materials.get(src.tex.name)
+                mat = materials.get(tex_name)
                 if mat is not None and mat.node_tree is not None:
                     for node in mat.node_tree.nodes:
                         if node.type == "TEX_IMAGE" and node.image is not None:
@@ -77,7 +192,11 @@ def run(operator: bpy.types.Operator, context: bpy.types.Context, filepath: str)
                     plane=csg.plane,
                     vertices=csg.vertices,
                     texture=csg.texture,
-                    metadata={"tex": src.tex, "tex_size": tex_size},
+                    metadata={
+                        "tex": src.tex,
+                        "tex_size": tex_size,
+                        "normal": src.plane.normal,
+                    },
                 ))
             obj = builder_geometry.build_map_brush(
                 brush, enriched, f"{classname}_brush_{brush_idx}",
@@ -88,6 +207,9 @@ def run(operator: bpy.types.Operator, context: bpy.types.Context, filepath: str)
                 obj["qb_brush_index"] = brush_idx
 
         if getattr(operator, "import_entities", True):
+            if (not getattr(operator, "import_lights", True)
+                    and classname.startswith("light")):
+                continue
             built = builder_entities.build_entity(entity.properties, ent_coll, scale=scale)
             if built is None and not entity.brushes:
                 # Entities with no origin and no brushes — drop a marker empty.

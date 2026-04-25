@@ -193,3 +193,37 @@ def _tokenize(text: str) -> list[str]:
         out.append(text[i:j])
         i = j
     return out
+
+
+# ----------------------------------------------------- patchDef2 serializer
+
+
+def _fmt_num(x: float) -> str:
+    """Format a float compactly (no trailing zeros, no scientific notation)."""
+    if x == 0.0:
+        return "0"
+    if x == int(x) and abs(x) < 1e15:
+        return str(int(x))
+    return f"{x:.6f}".rstrip("0").rstrip(".")
+
+
+def serialize_patch_def2(name: str, p: Patch, *, indent: str = "  ") -> str:
+    """Emit a ``patchDef2 { ... }`` block (without the outer brush braces).
+
+    Round-trips with :func:`parse_patch_def2_block`.
+    """
+    lines = ["patchDef2", "{", indent + name,
+             indent + f"( {p.width} {p.height} 0 0 0 )",
+             indent + "("]
+    for j in range(p.height):
+        row_parts: list[str] = []
+        for i in range(p.width):
+            c = p.get(i, j)
+            row_parts.append(
+                f"( {_fmt_num(c.pos.x)} {_fmt_num(c.pos.y)} {_fmt_num(c.pos.z)} "
+                f"{_fmt_num(c.uv[0])} {_fmt_num(c.uv[1])} )"
+            )
+        lines.append(indent * 2 + "( " + " ".join(row_parts) + " )")
+    lines.append(indent + ")")
+    lines.append("}")
+    return "\n".join(lines)

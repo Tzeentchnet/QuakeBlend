@@ -11,9 +11,17 @@ Repository: <https://github.com/Tzeentchnet/QuakeBlend>
 | 0 | Project skeleton + manifest | done |
 | 1 | Palette / WAD / WAL parsers + materials + WAD-only operator | done |
 | 2 | Quake 1 `.map` + `.bsp` import (CSG → mesh, entities, lights) | done |
-| 3 | Quake 2 `.map` + `.bsp` import (WAL textures, surface flags) | done |
-| 4 | Quake 3 `.map` + `.bsp` import (`brushDef3`, Bezier patches) | done |
+| 3 | Quake 2 `.map` + `.bsp` import (WAL textures, surface flags) | done* |
+| 4 | Quake 3 `.map` + `.bsp` import (Bezier patches imported; `brushDef3` parsed and skipped with a warning) | done* |
 | 5 | Preferences, logging polish, packaged release | done |
+| 6 | `.map` export with cross-game conversion (Q1 ↔ Q2 ↔ Q3) | done |
+
+\* Q2 `.map` parses `contents flags value` trailing fields and the MAP
+importer consults *Texture Root* for `.wal` lookups; surface flag
+propagation onto Blender materials is best-effort. Q3 `.map` import
+tessellates `patchDef2` patches but `brushDef3` brushes are captured
+verbatim and skipped at import time with a warning (no brush geometry is
+built for them).
 
 Export is **explicitly out of scope** for this initial release.
 
@@ -44,15 +52,70 @@ back to `Compress-Archive`.
 
 After installing, three import operators appear under *File → Import*:
 
-* **Quake MAP (.map)** — import any Q1/Q2/Q3 `.map` text file. Provide a
-  semicolon-separated list of `.wad` paths via the operator panel (or set the
-  default in *Edit → Preferences → Add-ons → QuakeBlend*) for Q1 textures.
+* **Quake MAP (.map)** — import any Q1/Q2/Q3 `.map` text file. Operator
+  options:
+  * *Scale* — world-unit scale (default `1/32`).
+  * *Texture projection* — `Auto` (per-face Standard vs Valve220 detection),
+    or force `Standard`/`Valve220`.
+  * *Texture root* — folder searched for external textures. Quake 2 `.wal`
+    files are looked up directly and under a `textures/` subfolder; Quake 3
+    image textures (`.tga` / `.jpg` / `.jpeg` / `.png`) are resolved by
+    face-texture name. Falls back to the add-on preference when blank.
+  * *WAD files* — semicolon-separated list of Quake 1 `.wad` files.
+  * *Import entities* / *Import lights* — toggle non-brush entities and
+    `light*` classnames respectively.
+  * *Patch tessellation level* — Q3 `patchDef2` subdivision (1–16, default
+    `5`); `brushDef3` brushes are parsed and skipped with a warning.
   Quake 3 patches are tessellated to mesh and the original control grid is
   stored in `obj["qb_patch_control_grid"]` for future round-trip.
 * **Quake BSP (.bsp)** — auto-detects Q1 (v29), Q2 (IBSP v38), Q3 (IBSP v46).
   For Q2/Q3 supply a *Texture Root* folder containing the `.wal` or
   `.tga` / `.jpg` / `.png` texture files.
 * **Quake WAD (.wad)** — load a WAD2/WAD3 archive as a set of materials.
+
+### Exporting MAP files
+
+A single export operator is registered under *File → Export*: **Quake MAP
+(.map)**. The exporter rewrites a previously imported `.map` file to a new
+destination, optionally converting between Q1, Q2, and Q3 dialects.
+
+**Source of truth.** The exporter re-parses the original `.map` file path
+cached on the imported root collection (`obj["qb_source_map"]`). This means
+brush geometry edits made in Blender after import are NOT included in the
+exported file. Entity property edits (origin, classname, key/value pairs)
+can optionally be folded in via the *Apply entity edits from scene* toggle:
+objects carrying `qb_entity_index` contribute their location (÷ import
+scale) as the entity's `origin`, and any custom properties named
+`qb_prop_<key>` overwrite the matching key.
+
+**Cross-game conversion.** Pick a *Target game*:
+
+* **Q1** — strips Q2 `contents flags value` trailers; converts Q3
+  `brushDef3` faces into Standard faces by decomposing the texture matrix
+  into `(xscale, yscale, rotation, xoffset, yoffset)`; tessellates Q3
+  `patchDef2` patches into thin extruded brush quads.
+* **Q2** — always emits trailing `contents flags value` ints; otherwise
+  identical to Q1 export.
+* **Q3** — preserves `brushDef3` and `patchDef2` blocks verbatim. Standard
+  faces are passed through; *patch handling = Keep* is only legal here.
+
+**Other options:**
+
+* *Texture projection*: `Auto` (per-face Standard vs Valve220), or force
+  one mode for every face.
+* *Q3 patches*: `Tessellate to brushes` (default) / `Drop with warning` /
+  `Keep verbatim` (Q3 target only).
+* *Patch tessellation level* (1–16) and *Patch extrusion thickness* (in
+  Quake units) tune the patch → brush conversion.
+* *Texture map (JSON)*: optional file containing a `{"src": "dst"}`
+  mapping. Use `"*"` as a fallback for any face name not explicitly
+  listed. Useful for Q1 → Q3 conversions where short Q1 texture names need
+  to be remapped to Q3-style `textures/<set>/<name>` paths.
+
+**Limitations.** BSP → MAP export is not supported (the exporter rejects
+collections without `qb_source_map`). Lightmap, shader, and `.wal`/image
+texture files are never written; only `.map` text. Q3 `patchDef3` blocks
+are not interpreted and are dropped on conversion.
 
 ### Coordinate scale
 
@@ -88,7 +151,7 @@ Two layers, separated so parsers are testable without Blender:
 python -m pytest
 ```
 
-The test suite exercises only the `formats` layer (30 tests).
+The test suite exercises only the `formats` layer (52 tests).
 Manual Blender smoke tests are listed above.
 
 ## Contributing

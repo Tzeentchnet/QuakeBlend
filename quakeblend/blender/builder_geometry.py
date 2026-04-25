@@ -80,8 +80,9 @@ def build_map_brush(brush: MapBrush, faces: Sequence[BrushFace], name: str,
         if face.metadata and "tex" in face.metadata:
             tex: MapTexInfo = face.metadata["tex"]
             tex_size = face.metadata.get("tex_size", (64, 64))
+            normal = face.metadata.get("normal")
             for loop, vert in zip(bm_face.loops, face.vertices):
-                u, v = _project_uv(tex, vert, tex_size)
+                u, v = _project_uv(tex, vert, tex_size, normal)
                 loop[uv_layer].uv = (u, 1.0 - v)
 
     bm.normal_update()
@@ -91,24 +92,22 @@ def build_map_brush(brush: MapBrush, faces: Sequence[BrushFace], name: str,
     return obj
 
 
-def _project_uv(tex: MapTexInfo, p: Vec3, tex_size: tuple[int, int]) -> tuple[float, float]:
+def _project_uv(tex: MapTexInfo, p: Vec3, tex_size: tuple[int, int],
+                normal: Vec3 | None = None) -> tuple[float, float]:
     """Project a world-space point to UV using either Valve220 or Standard math."""
     w, h = tex_size
     if tex.is_valve220 and tex.s_axis is not None and tex.t_axis is not None:
         u = (p.dot(tex.s_axis) / max(tex.xscale, 1e-6) + tex.s_offset) / max(w, 1)
         v = (p.dot(tex.t_axis) / max(tex.yscale, 1e-6) + tex.t_offset) / max(h, 1)
         return u, v
-    # Standard projection: pick the dominant axis of the face normal and
-    # use the corresponding planar projection. We don't have the normal here
-    # (the caller could pass it via metadata) — approximate via world axes.
-    # This is the textbook reference projection from idTech.
-    # Choose s/t axes per the face's dominant normal.
-    # Without the normal we assume X-Y plane (most common for flat surfaces).
-    # The full per-axis selector lives in :mod:`quakeblend.formats.csg` callers.
-    s_axis = Vec3(1, 0, 0)
-    t_axis = Vec3(0, -1, 0)
-    if "axis" in (getattr(tex, "_meta", None) or {}):
-        s_axis, t_axis = tex._meta["axis"]  # type: ignore[attr-defined]
+    # Standard projection: pick s/t axes from the face normal using the
+    # idTech ``TextureAxisFromPlane`` table. Fall back to the X/Y plane
+    # (most common for flat surfaces) when no normal is supplied.
+    if normal is not None:
+        s_axis, t_axis = _texture_axes_from_normal(normal)
+    else:
+        s_axis = Vec3(1, 0, 0)
+        t_axis = Vec3(0, -1, 0)
     cos_r = math.cos(math.radians(tex.rotation))
     sin_r = math.sin(math.radians(tex.rotation))
     s = p.dot(s_axis)
@@ -119,6 +118,32 @@ def _project_uv(tex: MapTexInfo, p: Vec3, tex_size: tuple[int, int]) -> tuple[fl
     u = (sr / max(tex.xscale, 1e-6) + tex.xoffset) / max(w, 1)
     v = (tr / max(tex.yscale, 1e-6) + tex.yoffset) / max(h, 1)
     return u, v
+
+
+# ``TextureAxisFromPlane`` lookup from the original Quake editors. Each row is
+# ``(reference_normal, s_axis, t_axis)``; the row whose reference normal has
+# the largest positive dot product with the face normal wins.
+_BASE_AXES: tuple[tuple[Vec3, Vec3, Vec3], ...] = (
+    (Vec3(0, 0, 1),  Vec3(1, 0, 0),  Vec3(0, -1, 0)),   # floor
+    (Vec3(0, 0, -1), Vec3(1, 0, 0),  Vec3(0, -1, 0)),   # ceiling
+    (Vec3(1, 0, 0),  Vec3(0, 1, 0),  Vec3(0, 0, -1)),   # west wall
+    (Vec3(-1, 0, 0), Vec3(0, 1, 0),  Vec3(0, 0, -1)),   # east wall
+    (Vec3(0, 1, 0),  Vec3(1, 0, 0),  Vec3(0, 0, -1)),   # south wall
+    (Vec3(0, -1, 0), Vec3(1, 0, 0),  Vec3(0, 0, -1)),   # north wall
+)
+
+
+def _texture_axes_from_normal(normal: Vec3) -> tuple[Vec3, Vec3]:
+    best_dot = -1.0
+    best_s = _BASE_AXES[0][1]
+    best_t = _BASE_AXES[0][2]
+    for ref, s, t in _BASE_AXES:
+        d = normal.dot(ref)
+        if d > best_dot:
+            best_dot = d
+            best_s = s
+            best_t = t
+    return best_s, best_t
 
 
 # --------------------------------------------------------------- BSP faces
