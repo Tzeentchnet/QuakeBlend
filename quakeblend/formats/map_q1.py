@@ -147,6 +147,8 @@ class _Tokenizer:
             j = self.i + 1
             while j < self.n and self.text[j] != '"':
                 j += 1
+            if j >= self.n:
+                raise ValueError("unterminated quoted string")
             tok = self.text[self.i + 1:j]
             self.i = j + 1
             return tok

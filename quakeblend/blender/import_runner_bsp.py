@@ -10,6 +10,7 @@ import bpy
 from ..formats import bsp_q1, bsp_q2, bsp_q3, palette as palette_mod, patch as patch_mod, wal as wal_mod
 from ..formats.common import Vec3
 from ..utils.constants import BSP_VERSION_Q1, BSP_VERSION_Q2, BSP_VERSION_Q3, IBSP_MAGIC
+from ..utils import log as qb_log
 from . import builder_entities, builder_geometry, builder_materials
 from .prefs import get_prefs
 
@@ -125,7 +126,7 @@ def _import_q1(operator: bpy.types.Operator, context: bpy.types.Context,
             classname = entity.get("classname", "entity")
             if not getattr(operator, "import_lights", True) and classname.startswith("light"):
                 continue
-            builder_entities.build_entity(entity, ent_coll, scale=scale)
+            builder_entities.build_entity(entity, ent_coll, scale=scale, operator=operator)
 
 
 def run(operator: bpy.types.Operator, context: bpy.types.Context, filepath: str) -> None:
@@ -265,7 +266,7 @@ def _import_q2(operator: bpy.types.Operator, context: bpy.types.Context,
             classname = entity.get("classname", "entity")
             if not getattr(operator, "import_lights", True) and classname.startswith("light"):
                 continue
-            builder_entities.build_entity(entity, ent_coll, scale=scale)
+            builder_entities.build_entity(entity, ent_coll, scale=scale, operator=operator)
 
 
 # ============================================================ Quake 3 ======
@@ -288,7 +289,8 @@ def _resolve_q3_texture(texture_root: Path | None, name: str) -> Path | None:
     return None
 
 
-def _build_q3_materials(bsp: bsp_q3.Bsp,
+def _build_q3_materials(operator: bpy.types.Operator,
+                        bsp: bsp_q3.Bsp,
                         texture_root: Path | None) -> list[bpy.types.Material]:
     out: list[bpy.types.Material] = []
     for tex in bsp.textures:
@@ -311,8 +313,12 @@ def _build_q3_materials(bsp: bsp_q3.Bsp,
                     tex_node.image = img
                     tex_node.interpolation = "Closest"
                     nt.links.new(tex_node.outputs["Color"], bsdf.inputs["Base Color"])
-                except RuntimeError:
-                    pass
+                except RuntimeError as exc:
+                    qb_log.report(
+                        operator,
+                        {"WARNING"},
+                        f"Failed to load texture image '{tex.name}' from '{path}': {exc}",
+                    )
         out.append(mat)
     return out
 
@@ -324,7 +330,7 @@ def _import_q3(operator: bpy.types.Operator, context: bpy.types.Context,
     texture_root = _resolve_texture_root(operator, context)
 
     bsp = bsp_q3.read_path(filepath)
-    material_list = _build_q3_materials(bsp, texture_root)
+    material_list = _build_q3_materials(operator, bsp, texture_root)
 
     scene = context.scene
     root = bpy.data.collections.new(filepath.stem)
@@ -388,7 +394,12 @@ def _import_q3(operator: bpy.types.Operator, context: bpy.types.Context,
         patch = patch_mod.Patch(width=cw, height=ch, controls=controls)
         try:
             tess = patch_mod.tessellate(patch, level=patch_level)
-        except ValueError:
+        except Exception as exc:
+            qb_log.report(
+                operator,
+                {"WARNING"},
+                f"Skipping patch {filepath.stem}_patch_{fi}: {exc}",
+            )
             continue
 
         flipped_quads = [[(u, 1.0 - v) for (u, v) in (tess.uvs[i] for i in q)] for q in tess.quads]
@@ -418,4 +429,4 @@ def _import_q3(operator: bpy.types.Operator, context: bpy.types.Context,
             classname = entity.get("classname", "entity")
             if not getattr(operator, "import_lights", True) and classname.startswith("light"):
                 continue
-            builder_entities.build_entity(entity, ent_coll, scale=scale)
+            builder_entities.build_entity(entity, ent_coll, scale=scale, operator=operator)

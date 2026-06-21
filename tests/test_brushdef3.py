@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import math
 
+import pytest
+
 from quakeblend.formats import brushdef3, map_q1
 from quakeblend.formats.common import Plane, Vec3
 
@@ -78,3 +80,41 @@ def test_three_points_round_trip_plane() -> None:
         assert math.isclose(recovered.normal.dot(face.plane.normal), 1.0,
                             abs_tol=1e-4)
         assert math.isclose(recovered.dist, face.plane.dist, abs_tol=1e-4)
+
+
+def test_parse_brushdef3_empty_input() -> None:
+    brush = brushdef3.parse_brushdef3_block("")
+    assert brush.raw_kind == "brushDef3"
+    assert brush.faces == []
+
+
+def test_parse_brushdef3_truncated_face_raises() -> None:
+    payload = "( 0 0 1 0 ) ( ( 0.03125 0 0 ) ( 0 0.03125"
+    with pytest.raises(ValueError):
+        brushdef3.parse_brushdef3_block(payload)
+
+
+def test_parse_brushdef3_invalid_plane_float_raises() -> None:
+    payload = """
+    ( nope 0 1 0 ) ( ( 0.03125 0 0 ) ( 0 0.03125 0 ) ) common/caulk 0 0 0
+    """
+    with pytest.raises(ValueError):
+        brushdef3.parse_brushdef3_block(payload)
+
+
+def test_parse_brushdef3_missing_parenthesis_raises() -> None:
+    payload = """
+    ( 0 0 1 0 ( ( 0.03125 0 0 ) ( 0 0.03125 0 ) ) common/caulk 0 0 0
+    """
+    with pytest.raises(ValueError):
+        brushdef3.parse_brushdef3_block(payload)
+
+
+def test_parse_brushdef3_ignores_trailing_tokens() -> None:
+    payload = (
+        "( 0 0 1 0 ) ( ( 0.03125 0 0 ) ( 0 0.03125 0 ) ) common/caulk 0 0 0 "
+        "trailing junk tokens"
+    )
+    brush = brushdef3.parse_brushdef3_block(payload)
+    assert len(brush.faces) == 1
+    assert brush.faces[0].tex.name == "common/caulk"

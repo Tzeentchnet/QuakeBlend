@@ -36,7 +36,7 @@ from pathlib import Path
 from typing import BinaryIO
 
 from ..utils.constants import WAD2_MAGIC, WAD3_MAGIC, WAD_TYPE_MIPTEX
-from .common import BinaryReader
+from .common import BinaryReader, read_exact
 
 
 @dataclass(frozen=True)
@@ -118,7 +118,7 @@ def read_miptex(stream: BinaryIO, *, base_offset: int, payload_size: int,
             mip_pixels.append(b"")
             continue
         stream.seek(base_offset + off)
-        mip_pixels.append(stream.read(w * h))
+        mip_pixels.append(read_exact(stream, w * h))
 
     palette: bytes | None = None
     if expect_palette:
@@ -131,7 +131,7 @@ def read_miptex(stream: BinaryIO, *, base_offset: int, payload_size: int,
         if stream.tell() + 2 <= max_end:
             (count,) = BinaryReader(stream).unpack("H")
             if count == 256 and stream.tell() + 768 <= max_end:
-                palette = stream.read(768)
+                palette = read_exact(stream, 768)
 
     return MipTexture(
         name=name,

@@ -154,6 +154,14 @@ class BinaryReader:
             yield struct.unpack(fmt_e, self.read(size))
 
 
+def read_exact(stream: BinaryIO, n: int) -> bytes:
+    """Read exactly *n* bytes from *stream*, raising on short reads."""
+    data = stream.read(n)
+    if len(data) != n:
+        raise EOFError(f"expected {n} bytes, got {len(data)}")
+    return data
+
+
 def chunks(seq: bytes, size: int) -> Iterable[bytes]:
     for i in range(0, len(seq), size):
         yield seq[i : i + size]

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import math
 
+import pytest
+
 from quakeblend.formats import patch as patch_mod
 from quakeblend.formats.common import Vec3
 
@@ -63,3 +65,44 @@ def test_parse_patch_def2_block() -> None:
     centre = p.controls[4]
     assert math.isclose(centre.pos.z, 1.0)
     assert centre.uv == (0.5, 0.5)
+
+
+def test_parse_patch_def2_missing_closing_paren_raises() -> None:
+    payload = """
+    common/clip
+    ( 3 3 0 0 0 )
+    (
+      ( ( 0 0 0 0 0 ) ( 1 0 0 0.5 0 ) ( 2 0 0 1 0 ) )
+      ( ( 0 1 0 0 0.5 ) ( 1 1 1 0.5 0.5 ) ( 2 1 0 1 0.5 ) )
+      ( ( 0 2 0 0 1 ) ( 1 2 0 0.5 1 ) ( 2 2 0 1 1 ) )
+    """
+    with pytest.raises(ValueError):
+        patch_mod.parse_patch_def2_block(payload)
+
+
+def test_tessellate_rejects_level_below_one() -> None:
+    with pytest.raises(ValueError):
+        patch_mod.tessellate(_flat_3x3(), level=0)
+
+
+def test_tessellate_minimum_valid_patch() -> None:
+    tess = patch_mod.tessellate(_flat_3x3(), level=1)
+    assert len(tess.vertices) == 4
+    assert len(tess.quads) == 1
+    assert tess.quads == [(0, 1, 3, 2)]
+
+
+def test_parse_patch_def2_zero_sized_grid() -> None:
+    name, p = patch_mod.parse_patch_def2_block(
+        """
+        common/clip
+        ( 0 0 0 0 0 )
+        (
+        )
+        """
+    )
+    assert name == "common/clip"
+    assert p.width == 0 and p.height == 0
+    assert p.controls == []
+    with pytest.raises(ValueError):
+        patch_mod.tessellate(p)

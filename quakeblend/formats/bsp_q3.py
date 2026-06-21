@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import io
 import struct
+import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import BinaryIO, List
@@ -115,11 +116,35 @@ def _read_lumps(r: BinaryReader) -> list[Lump]:
 
 
 def _slice(data: bytes, lump: Lump) -> bytes:
+    if lump.offset < 0 or lump.size < 0:
+        raise ValueError(
+            f"invalid BSP lump bounds: offset={lump.offset}, size={lump.size}"
+        )
+    if lump.offset > len(data):
+        raise ValueError(
+            f"BSP lump offset {lump.offset} beyond end of file ({len(data)} bytes)"
+        )
+    end = lump.offset + lump.size
+    if end > len(data):
+        raise EOFError(
+            f"truncated BSP lump: offset={lump.offset}, size={lump.size}, "
+            f"file_size={len(data)}"
+        )
     return data[lump.offset:lump.offset + lump.size]
+
+
+def _warn_trailing_bytes(blob: bytes, size: int) -> None:
+    leftover = len(blob) % size
+    if leftover:
+        warnings.warn(
+            f"BSP lump has {leftover} trailing bytes (possible corruption)",
+            stacklevel=2,
+        )
 
 
 def _read_textures(blob: bytes) -> list[Texture]:
     SIZE = 72
+    _warn_trailing_bytes(blob, SIZE)
     n = len(blob) // SIZE
     out: list[Texture] = []
     for i in range(n):
@@ -137,6 +162,7 @@ def _read_textures(blob: bytes) -> list[Texture]:
 
 def _read_vertices(blob: bytes) -> list[Vertex]:
     SIZE = 44
+    _warn_trailing_bytes(blob, SIZE)
     n = len(blob) // SIZE
     out: list[Vertex] = []
     for i in range(n):
@@ -153,12 +179,14 @@ def _read_vertices(blob: bytes) -> list[Vertex]:
 
 
 def _read_meshverts(blob: bytes) -> list[int]:
+    _warn_trailing_bytes(blob, 4)
     n = len(blob) // 4
-    return list(struct.unpack(f"<{n}i", blob)) if n else []
+    return list(struct.unpack(f"<{n}i", blob[:n * 4])) if n else []
 
 
 def _read_faces(blob: bytes) -> list[Face]:
     SIZE = 104
+    _warn_trailing_bytes(blob, SIZE)
     n = len(blob) // SIZE
     out: list[Face] = []
     for i in range(n):
@@ -186,6 +214,7 @@ def _read_faces(blob: bytes) -> list[Face]:
 
 def _read_lightmaps(blob: bytes) -> list[bytes]:
     SIZE = LIGHTMAP_DIM * LIGHTMAP_DIM * 3
+    _warn_trailing_bytes(blob, SIZE)
     n = len(blob) // SIZE
     return [blob[i * SIZE:(i + 1) * SIZE] for i in range(n)]
 

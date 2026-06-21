@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from quakeblend.formats import map_q1
 
 
@@ -86,3 +88,9 @@ def test_q3_patch_captured_verbatim() -> None:
     brush = mf.entities[0].brushes[0]
     assert brush.raw_kind == "patchDef2"
     assert "common/clip" in brush.raw_payload
+
+
+def test_unterminated_quoted_string_raises() -> None:
+    bad_map = '{\n"classname" "worldspawn\n}\n'
+    with pytest.raises(ValueError, match="unterminated quoted string"):
+        map_q1.parse(bad_map)

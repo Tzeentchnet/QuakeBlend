@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO
 
-from .common import BinaryReader
+from .common import BinaryReader, read_exact
 
 WAL_HEADER_SIZE = 100
 
@@ -65,7 +65,7 @@ def read_wal(stream: BinaryIO) -> Wal:
         w = max(1, width >> level)
         h = max(1, height >> level)
         stream.seek(off)
-        mips.append(stream.read(w * h))
+        mips.append(read_exact(stream, w * h))
 
     return Wal(
         name=name,

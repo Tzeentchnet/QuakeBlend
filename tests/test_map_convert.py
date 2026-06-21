@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from quakeblend.formats import map_convert, map_q1, map_writer
+from quakeblend.formats import map_convert, map_q1, map_q3, map_writer
 
 
 CUBE_Q2 = """
@@ -91,7 +91,7 @@ def test_q1_to_q3_round_trips_via_q3_parser() -> None:
     converted, _ = map_convert.convert(mf, source="q1", target="q3")
     text = map_writer.serialize(converted, dialect="q3")
     # The Q3 parser should accept this happily.
-    parsed = map_q1.parse(text)
+    parsed = map_q3.parse(text)
     assert len(parsed.entities[0].brushes[0].faces) == 6
 
 
@@ -157,3 +157,27 @@ def test_texture_remap_fallback_wildcard() -> None:
                                        options=options)
     for face in converted.entities[0].brushes[0].faces:
         assert face.tex.name == "textures/missing"
+
+
+def test_patch_texture_remap_parse_failure_surfaces_warning() -> None:
+    brush = map_q1.MapBrush(
+        faces=[],
+        raw_kind="patchDef2",
+        raw_payload="this is not a valid patchDef2 body",
+    )
+    mf = map_q1.MapFile(
+        entities=[map_q1.MapEntity(properties={"classname": "worldspawn"},
+                                   brushes=[brush])]
+    )
+    options = map_convert.ConvertOptions(
+        texture_map={"common/clip": "textures/base_wall/c_wall1a"},
+        patch_handling="keep",
+    )
+
+    converted, report = map_convert.convert(mf, source="q3", target="q3",
+                                            options=options)
+
+    assert len(converted.entities[0].brushes) == 1
+    assert converted.entities[0].brushes[0].raw_payload == brush.raw_payload
+    assert report.warnings
+    assert "failed to remap patchDef2 texture" in report.warnings[0]

@@ -31,10 +31,10 @@ CUBE_Q2 = """
 {
 ( -64 -64 -16 ) ( -64 -63 -16 ) ( -64 -64 -15 ) e1u1/wall 0 0 0 1 1 1 2 3
 ( -64 -64 -16 ) ( -64 -64 -15 ) ( -63 -64 -16 ) e1u1/wall 0 0 0 1 1 0 0 0
-( -64 -64 -16 ) ( -63 -64 -16 ) ( -64 -63 -16 ) e1u1/wall 0 0 0 1 1 4 0 0
-( 64 64 16 ) ( 64 64 17 ) ( 64 65 16 ) e1u1/wall 0 0 0 1 1 0 0 0
-( 64 64 16 ) ( 65 64 16 ) ( 64 64 17 ) e1u1/wall 0 0 0 1 1 0 0 0
-( 64 64 16 ) ( 64 65 16 ) ( 65 64 16 ) e1u1/wall 0 0 0 1 1 0 0 0
+( -64 -64 -16 ) ( -63 -64 -16 ) ( -64 -63 -16 ) e1u1/wall 0 0 0 1 1 4 5 6
+( 64 64 16 ) ( 64 64 17 ) ( 64 65 16 ) e1u1/wall 0 0 0 1 1 7 8 9
+( 64 64 16 ) ( 65 64 16 ) ( 64 64 17 ) e1u1/wall 0 0 0 1 1 10 11 12
+( 64 64 16 ) ( 64 65 16 ) ( 65 64 16 ) e1u1/wall 0 0 0 1 1 13 14 15
 }
 }
 """
@@ -58,6 +58,95 @@ def _planes_close(a, b, *, tol: float = 1e-3) -> bool:
     return math.isclose(a.dist, b.dist, abs_tol=tol)
 
 
+def _assert_face_round_trip(expected, actual) -> None:
+    assert expected.tex.name == actual.tex.name
+    assert math.isclose(expected.tex.xoffset, actual.tex.xoffset, abs_tol=1e-6)
+    assert math.isclose(expected.tex.yoffset, actual.tex.yoffset, abs_tol=1e-6)
+    assert math.isclose(expected.tex.rotation, actual.tex.rotation, abs_tol=1e-6)
+    assert math.isclose(expected.tex.xscale, actual.tex.xscale, abs_tol=1e-6)
+    assert math.isclose(expected.tex.yscale, actual.tex.yscale, abs_tol=1e-6)
+    assert _planes_close(expected.plane, actual.plane)
+
+
+def _assert_brush_round_trip(expected, actual) -> None:
+    assert len(expected.faces) == len(actual.faces)
+    for expected_face, actual_face in zip(expected.faces, actual.faces):
+        _assert_face_round_trip(expected_face, actual_face)
+
+
+MULTI_BRUSH_Q1 = """
+{
+"classname" "worldspawn"
+{
+( -64 -64 -16 ) ( -64 -63 -16 ) ( -64 -64 -15 ) BRICK1 8 -4 15 0.5 1.25
+( -64 -64 -16 ) ( -64 -64 -15 ) ( -63 -64 -16 ) METAL2 -16 12 45 1.5 0.75
+( -64 -64 -16 ) ( -63 -64 -16 ) ( -64 -63 -16 ) FLOOR3 3 7 90 2 2.5
+( 64 64 16 ) ( 64 64 17 ) ( 64 65 16 ) CEIL4 -2 -8 135 0.25 4
+( 64 64 16 ) ( 65 64 16 ) ( 64 64 17 ) TRIM5 11 13 -30 1 0.5
+( 64 64 16 ) ( 64 65 16 ) ( 65 64 16 ) LIGHT6 -9 5 270 3 1
+}
+{
+( 96 -64 -16 ) ( 96 -63 -16 ) ( 96 -64 -15 ) STONE1 0 0 0 1 1
+( 96 -64 -16 ) ( 96 -64 -15 ) ( 97 -64 -16 ) STONE1 0 0 0 1 1
+( 96 -64 -16 ) ( 97 -64 -16 ) ( 96 -63 -16 ) STONE1 0 0 0 1 1
+( 160 64 16 ) ( 160 64 17 ) ( 160 65 16 ) STONE1 0 0 0 1 1
+( 160 64 16 ) ( 161 64 16 ) ( 160 64 17 ) STONE1 0 0 0 1 1
+( 160 64 16 ) ( 160 65 16 ) ( 161 64 16 ) STONE1 0 0 0 1 1
+}
+}
+"""
+
+
+MULTI_ENTITY_Q1 = """
+{
+"classname" "worldspawn"
+{
+( -64 -64 -16 ) ( -64 -63 -16 ) ( -64 -64 -15 ) BRICK1 0 0 0 1 1
+( -64 -64 -16 ) ( -64 -64 -15 ) ( -63 -64 -16 ) BRICK1 0 0 0 1 1
+( -64 -64 -16 ) ( -63 -64 -16 ) ( -64 -63 -16 ) BRICK1 0 0 0 1 1
+( 64 64 16 ) ( 64 64 17 ) ( 64 65 16 ) BRICK1 0 0 0 1 1
+( 64 64 16 ) ( 65 64 16 ) ( 64 64 17 ) BRICK1 0 0 0 1 1
+( 64 64 16 ) ( 64 65 16 ) ( 65 64 16 ) BRICK1 0 0 0 1 1
+}
+}
+{
+"classname" "func_door"
+"targetname" "door1"
+{
+( 96 -64 -16 ) ( 96 -63 -16 ) ( 96 -64 -15 ) METAL1 0 0 0 1 1
+( 96 -64 -16 ) ( 96 -64 -15 ) ( 97 -64 -16 ) METAL1 0 0 0 1 1
+( 96 -64 -16 ) ( 97 -64 -16 ) ( 96 -63 -16 ) METAL1 0 0 0 1 1
+( 160 64 16 ) ( 160 64 17 ) ( 160 65 16 ) METAL1 0 0 0 1 1
+( 160 64 16 ) ( 161 64 16 ) ( 160 64 17 ) METAL1 0 0 0 1 1
+( 160 64 16 ) ( 160 65 16 ) ( 161 64 16 ) METAL1 0 0 0 1 1
+}
+{
+( 192 -64 -16 ) ( 192 -63 -16 ) ( 192 -64 -15 ) METAL2 0 0 0 1 1
+( 192 -64 -16 ) ( 192 -64 -15 ) ( 193 -64 -16 ) METAL2 0 0 0 1 1
+( 192 -64 -16 ) ( 193 -64 -16 ) ( 192 -63 -16 ) METAL2 0 0 0 1 1
+( 256 64 16 ) ( 256 64 17 ) ( 256 65 16 ) METAL2 0 0 0 1 1
+( 256 64 16 ) ( 257 64 16 ) ( 256 64 17 ) METAL2 0 0 0 1 1
+( 256 64 16 ) ( 256 65 16 ) ( 257 64 16 ) METAL2 0 0 0 1 1
+}
+}
+{
+"classname" "trigger_once"
+{
+( 320 -64 -16 ) ( 320 -63 -16 ) ( 320 -64 -15 ) TRIGGER1 0 0 0 1 1
+( 320 -64 -16 ) ( 320 -64 -15 ) ( 321 -64 -16 ) TRIGGER1 0 0 0 1 1
+( 320 -64 -16 ) ( 321 -64 -16 ) ( 320 -63 -16 ) TRIGGER1 0 0 0 1 1
+( 384 64 16 ) ( 384 64 17 ) ( 384 65 16 ) TRIGGER1 0 0 0 1 1
+( 384 64 16 ) ( 385 64 16 ) ( 384 64 17 ) TRIGGER1 0 0 0 1 1
+( 384 64 16 ) ( 384 65 16 ) ( 385 64 16 ) TRIGGER1 0 0 0 1 1
+}
+}
+{
+"classname" "info_player_start"
+"origin" "0 0 24"
+}
+"""
+
+
 def test_q1_round_trip_structural() -> None:
     mf = map_q1.parse(CUBE_Q1)
     text = map_writer.serialize(mf, dialect="q1")
@@ -72,16 +161,47 @@ def test_q1_round_trip_structural() -> None:
     assert mf2.entities[1].properties["origin"] == "0 0 24"
 
 
+def test_q1_round_trip_multi_brush_entity_preserves_all_brushes() -> None:
+    mf = map_q1.parse(MULTI_BRUSH_Q1)
+    text = map_writer.serialize(mf, dialect="q1")
+    mf2 = map_q1.parse(text)
+    expected_entity = mf.entities[0]
+    actual_entity = mf2.entities[0]
+    assert len(actual_entity.brushes) == len(expected_entity.brushes)
+    for expected_brush, actual_brush in zip(expected_entity.brushes, actual_entity.brushes):
+        _assert_brush_round_trip(expected_brush, actual_brush)
+
+
+def test_q1_round_trip_multiple_entities_preserves_brush_counts() -> None:
+    mf = map_q1.parse(MULTI_ENTITY_Q1)
+    text = map_writer.serialize(mf, dialect="q1")
+    mf2 = map_q1.parse(text)
+    assert len(mf2.entities) == len(mf.entities)
+    assert [ent.properties["classname"] for ent in mf2.entities] == [
+        ent.properties["classname"] for ent in mf.entities
+    ]
+    assert [len(ent.brushes) for ent in mf2.entities] == [len(ent.brushes) for ent in mf.entities]
+    assert mf2.entities[1].properties["targetname"] == "door1"
+    assert mf2.entities[-1].properties["origin"] == "0 0 24"
+
+
 def test_q2_round_trip_preserves_trailing_fields() -> None:
     mf = map_q1.parse(CUBE_Q2)
     text = map_writer.serialize(mf, dialect="q2")
     mf2 = map_q1.parse(text)
-    f0 = mf2.entities[0].brushes[0].faces[0]
-    assert f0.tex.contents == 1
-    assert f0.tex.surface_flags == 2
-    assert f0.tex.value == 3
-    f2 = mf2.entities[0].brushes[0].faces[2]
-    assert f2.tex.contents == 4
+    brush = mf2.entities[0].brushes[0]
+    expected_trailing = [
+        (1, 2, 3),
+        (0, 0, 0),
+        (4, 5, 6),
+        (7, 8, 9),
+        (10, 11, 12),
+        (13, 14, 15),
+    ]
+    for face, (contents, surface_flags, value) in zip(brush.faces, expected_trailing):
+        assert face.tex.contents == contents
+        assert face.tex.surface_flags == surface_flags
+        assert face.tex.value == value
 
 
 def test_q1_dialect_strips_q2_trailing_via_writer_round_trip() -> None:

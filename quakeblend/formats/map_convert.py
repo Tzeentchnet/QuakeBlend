@@ -210,7 +210,7 @@ def convert(mf: MapFile, *, source: Game, target: Game,
                             "patch kept but target is not q3; output may be invalid"
                         )
                     new_brushes.append(_remap_brush_textures(brush, options.texture_map,
-                                                             target))
+                                                             target, report))
                     continue
                 if options.patch_handling == "drop":
                     report.warnings.append(
@@ -219,7 +219,7 @@ def convert(mf: MapFile, *, source: Game, target: Game,
                     continue
                 # tessellate
                 new_brushes.extend(
-                    _remap_brush_textures(b, options.texture_map, target)
+                    _remap_brush_textures(b, options.texture_map, target, report)
                     for b in _tessellate_patch_brush(brush, options, report)
                 )
                 continue
@@ -229,7 +229,8 @@ def convert(mf: MapFile, *, source: Game, target: Game,
                 continue
 
             # 3. standard / brushDef3-already-handled brushes
-            new_brushes.append(_remap_brush_textures(brush, options.texture_map, target))
+            new_brushes.append(_remap_brush_textures(brush, options.texture_map, target,
+                                                     report))
 
         new_entities.append(MapEntity(properties=dict(ent.properties),
                                       brushes=new_brushes))
@@ -239,13 +240,18 @@ def convert(mf: MapFile, *, source: Game, target: Game,
 
 def _remap_brush_textures(brush: MapBrush,
                           texture_map: Optional[Dict[str, str]],
-                          target: Game) -> MapBrush:
+                          target: Game,
+                          report: Optional[ConvertReport] = None) -> MapBrush:
     """Apply texture remap + trailing-field strip per face for the target game."""
     if brush.raw_kind == "patchDef2" and texture_map is not None:
         # Patch texture is embedded in raw_payload — rewrite it by reparse.
         try:
             name, patch = patch_mod.parse_patch_def2_block(brush.raw_payload)
-        except (ValueError, StopIteration):
+        except (ValueError, StopIteration) as exc:
+            if report is not None:
+                report.warnings.append(
+                    f"failed to remap patchDef2 texture; keeping original brush: {exc}"
+                )
             return brush
         new_name = _remap_texture(name, texture_map)
         if new_name != name:

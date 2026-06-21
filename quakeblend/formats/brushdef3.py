@@ -139,50 +139,57 @@ def parse_brushdef3_block(payload: str) -> MapBrush:
         return idx + 1
 
     while i < n:
-        # Plane: ( nx ny nz d )
-        i = expect(i, "(")
-        nx = float(tokens[i]); ny = float(tokens[i + 1])
-        nz = float(tokens[i + 2]); dist = float(tokens[i + 3])
-        i += 4
-        i = expect(i, ")")
-        # Texture matrix: ( ( a b c ) ( d e f ) )
-        i = expect(i, "(")
-        i = expect(i, "(")
-        row0 = [float(tokens[i]), float(tokens[i + 1]), float(tokens[i + 2])]
-        i += 3
-        i = expect(i, ")")
-        i = expect(i, "(")
-        row1 = [float(tokens[i]), float(tokens[i + 1]), float(tokens[i + 2])]
-        i += 3
-        i = expect(i, ")")
-        i = expect(i, ")")
-        # Texture name + optional ``contents flags value``.
-        name = tokens[i]
-        i += 1
-        trailing: List[int] = []
-        while i < n and len(trailing) < 3 and tokens[i] != "(":
-            tok = tokens[i]
-            try:
-                trailing.append(
-                    int(tok) if "." not in tok and "e" not in tok and "E" not in tok
-                    else int(float(tok))
-                )
-            except ValueError:
-                break
+        if faces and tokens[i] != "(":
+            break
+        try:
+            # Plane: ( nx ny nz d )
+            i = expect(i, "(")
+            nx = float(tokens[i]); ny = float(tokens[i + 1])
+            nz = float(tokens[i + 2]); dist = float(tokens[i + 3])
+            i += 4
+            i = expect(i, ")")
+            # Texture matrix: ( ( a b c ) ( d e f ) )
+            i = expect(i, "(")
+            i = expect(i, "(")
+            row0 = [float(tokens[i]), float(tokens[i + 1]), float(tokens[i + 2])]
+            i += 3
+            i = expect(i, ")")
+            i = expect(i, "(")
+            row1 = [float(tokens[i]), float(tokens[i + 1]), float(tokens[i + 2])]
+            i += 3
+            i = expect(i, ")")
+            i = expect(i, ")")
+            # Texture name + optional ``contents flags value``.
+            name = tokens[i]
             i += 1
-        contents = trailing[0] if len(trailing) >= 1 else 0
-        surface_flags = trailing[1] if len(trailing) >= 2 else 0
-        value = trailing[2] if len(trailing) >= 3 else 0
+            trailing: List[int] = []
+            while i < n and len(trailing) < 3 and tokens[i] != "(":
+                tok = tokens[i]
+                try:
+                    trailing.append(
+                        int(tok) if "." not in tok and "e" not in tok and "E" not in tok
+                        else int(float(tok))
+                    )
+                except ValueError:
+                    break
+                i += 1
+            contents = trailing[0] if len(trailing) >= 1 else 0
+            surface_flags = trailing[1] if len(trailing) >= 2 else 0
+            value = trailing[2] if len(trailing) >= 3 else 0
 
-        plane = Plane(Vec3(nx, ny, nz), dist)
-        p1, p2, p3 = _three_points_from_plane(plane)
-        tex = TexInfo(
-            name=name,
-            tex_matrix=((row0[0], row0[1], row0[2]),
-                        (row1[0], row1[1], row1[2])),
-            contents=contents, surface_flags=surface_flags, value=value,
-        )
-        faces.append(MapFace(p1=p1, p2=p2, p3=p3, tex=tex))
+            plane = Plane(Vec3(nx, ny, nz), dist)
+            p1, p2, p3 = _three_points_from_plane(plane)
+            tex = TexInfo(
+                name=name,
+                tex_matrix=((row0[0], row0[1], row0[2]),
+                            (row1[0], row1[1], row1[2])),
+                contents=contents, surface_flags=surface_flags, value=value,
+            )
+            faces.append(MapFace(p1=p1, p2=p2, p3=p3, tex=tex))
+        except (IndexError, ValueError) as exc:
+            raise ValueError(
+                f"malformed brushDef3 face near token {i}: {exc}"
+            ) from exc
 
     return MapBrush(faces=faces, raw_kind="brushDef3", raw_payload=payload)
 

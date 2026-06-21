@@ -8,6 +8,7 @@ import bpy
 
 from ..formats import map_q1, palette as palette_mod, patch as patch_mod, wad as wad_mod, wal as wal_mod
 from ..formats.csg import BrushFace, brush_faces
+from ..utils import log as qb_log
 from . import builder_entities, builder_geometry, builder_materials
 from .prefs import get_prefs
 
@@ -78,7 +79,9 @@ def _resolve_external_texture(texture_root: Path, name: str) -> tuple[Path, str]
     return None
 
 
-def _material_for_external(name: str, info: tuple[Path, str],
+def _material_for_external(operator: bpy.types.Operator,
+                           name: str,
+                           info: tuple[Path, str],
                            q2_palette: palette_mod.Palette) -> bpy.types.Material | None:
     path, kind = info
     if kind == "wal":
@@ -105,8 +108,12 @@ def _material_for_external(name: str, info: tuple[Path, str],
         tex_node.image = img
         tex_node.interpolation = "Closest"
         nt.links.new(tex_node.outputs["Color"], bsdf.inputs["Base Color"])
-    except RuntimeError:
-        pass
+    except RuntimeError as exc:
+        qb_log.report(
+            operator,
+            {"WARNING"},
+            f"Failed to load texture image '{name}' from '{path}': {exc}",
+        )
     return mat
 
 
@@ -178,7 +185,7 @@ def run(operator: bpy.types.Operator, context: bpy.types.Context, filepath: str)
                 if tex_name not in materials and texture_root is not None:
                     info = _resolve_external_texture(texture_root, tex_name)
                     if info is not None:
-                        mat = _material_for_external(tex_name, info, q2_palette)
+                        mat = _material_for_external(operator, tex_name, info, q2_palette)
                         if mat is not None:
                             materials[tex_name] = mat
                 tex_size = (64, 64)
@@ -210,7 +217,12 @@ def run(operator: bpy.types.Operator, context: bpy.types.Context, filepath: str)
             if (not getattr(operator, "import_lights", True)
                     and classname.startswith("light")):
                 continue
-            built = builder_entities.build_entity(entity.properties, ent_coll, scale=scale)
+            built = builder_entities.build_entity(
+                entity.properties,
+                ent_coll,
+                scale=scale,
+                operator=operator,
+            )
             if built is None and not entity.brushes:
                 # Entities with no origin and no brushes — drop a marker empty.
                 empty = bpy.data.objects.new(classname, None)
@@ -222,8 +234,8 @@ def _build_patch(operator, brush, collection, name: str, scale: float) -> None:
     try:
         tex_name, p = patch_mod.parse_patch_def2_block(brush.raw_payload)
         tess = patch_mod.tessellate(p, level=int(getattr(operator, "patch_level", 5)))
-    except (ValueError, StopIteration) as exc:
-        operator.report({"WARNING"}, f"Skipping patch {name}: {exc}")
+    except Exception as exc:
+        qb_log.report(operator, {"WARNING"}, f"Skipping patch {name}: {exc}")
         return
 
     mesh = bpy.data.meshes.new(name)

@@ -72,7 +72,11 @@ def _apply_entity_overlay(mf: map_q1.MapFile,
     def visit(coll: bpy.types.Collection) -> None:
         for obj in coll.objects:
             if "qb_entity_index" in obj:
-                by_index[int(obj["qb_entity_index"])] = obj
+                try:
+                    idx = int(obj["qb_entity_index"])
+                except (TypeError, ValueError):
+                    continue
+                by_index[idx] = obj
         for child in coll.children:
             visit(child)
 
@@ -209,6 +213,23 @@ class EXPORT_OT_quake_map(bpy.types.Operator, ExportHelper):
             if not isinstance(texture_map, dict):
                 self.report({"ERROR"}, "Texture map JSON must be an object")
                 return {"CANCELLED"}
+            invalid_texture_map_keys: list[str] = []
+            valid_texture_map: dict[str, str] = {}
+            for key, value in texture_map.items():
+                if isinstance(key, str) and isinstance(value, str):
+                    valid_texture_map[key] = value
+                    continue
+                invalid_texture_map_keys.append(repr(key))
+            if invalid_texture_map_keys:
+                invalid_list = ", ".join(invalid_texture_map_keys[:10])
+                if len(invalid_texture_map_keys) > 10:
+                    invalid_list += ", ..."
+                self.report(
+                    {"WARNING"},
+                    "Skipping texture map entries with non-string key/value for keys: "
+                    f"{invalid_list}",
+                )
+            texture_map = valid_texture_map
 
         patch_handling_map = {"TESSELLATE": "tessellate", "DROP": "drop", "KEEP": "keep"}
         patch_handling = patch_handling_map[self.patch_handling]

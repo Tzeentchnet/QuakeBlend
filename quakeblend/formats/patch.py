@@ -138,34 +138,39 @@ def parse_patch_def2_block(payload: str) -> tuple[str, Patch]:
     if tokens and tokens[-1] == "}":
         tokens = tokens[:-1]
     it = iter(tokens)
-    name = next(it)
-    if next(it) != "(":
-        raise ValueError("expected '(' after patch texture name")
-    width = int(next(it))
-    height = int(next(it))
-    # Skip three trailing zeros.
-    next(it); next(it); next(it)
-    if next(it) != ")":
-        raise ValueError("expected ')' closing patch header")
-    if next(it) != "(":
-        raise ValueError("expected '(' opening control grid")
-
-    controls: list[Control] = [Control(Vec3(0, 0, 0), (0.0, 0.0))] * (width * height)
-    for j in range(height):
+    try:
+        name = next(it)
         if next(it) != "(":
-            raise ValueError(f"expected '(' opening row {j}")
-        for i in range(width):
-            if next(it) != "(":
-                raise ValueError(f"expected '(' opening control ({i},{j})")
-            x = float(next(it)); y = float(next(it)); z = float(next(it))
-            u = float(next(it)); v = float(next(it))
-            if next(it) != ")":
-                raise ValueError("expected ')' closing control")
-            controls[j * width + i] = Control(Vec3(x, y, z), (u, v))
+            raise ValueError("expected '(' after patch texture name")
+        width = int(next(it))
+        height = int(next(it))
+        # Skip three trailing zeros.
+        next(it); next(it); next(it)
         if next(it) != ")":
-            raise ValueError(f"expected ')' closing row {j}")
-    if next(it) != ")":
-        raise ValueError("expected ')' closing control grid")
+            raise ValueError("expected ')' closing patch header")
+        if next(it) != "(":
+            raise ValueError("expected '(' opening control grid")
+
+        controls: list[Control] = [
+            Control(Vec3(0, 0, 0), (0.0, 0.0)) for _ in range(width * height)
+        ]
+        for j in range(height):
+            if next(it) != "(":
+                raise ValueError(f"expected '(' opening row {j}")
+            for i in range(width):
+                if next(it) != "(":
+                    raise ValueError(f"expected '(' opening control ({i},{j})")
+                x = float(next(it)); y = float(next(it)); z = float(next(it))
+                u = float(next(it)); v = float(next(it))
+                if next(it) != ")":
+                    raise ValueError("expected ')' closing control")
+                controls[j * width + i] = Control(Vec3(x, y, z), (u, v))
+            if next(it) != ")":
+                raise ValueError(f"expected ')' closing row {j}")
+        if next(it) != ")":
+            raise ValueError("expected ')' closing control grid")
+    except StopIteration as exc:
+        raise ValueError("malformed patchDef2 block") from exc
 
     return name, Patch(width=width, height=height, controls=controls)
 

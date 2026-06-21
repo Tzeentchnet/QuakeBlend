@@ -16,6 +16,7 @@ parser when version == 29.
 from __future__ import annotations
 
 import io
+import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import BinaryIO, List
@@ -105,8 +106,20 @@ class Bsp:
     def face_polygon(self, face: Face) -> List[int]:
         verts: list[int] = []
         for k in range(face.ledge_num):
-            sledge = self.ledges[face.ledge_id + k]
-            edge = self.edges[abs(sledge)]
+            ledge_idx = face.ledge_id + k
+            if not 0 <= ledge_idx < len(self.ledges):
+                raise ValueError(
+                    f"corrupt BSP: ledge index {ledge_idx} out of range "
+                    f"(max {len(self.ledges) - 1})"
+                )
+            sledge = self.ledges[ledge_idx]
+            edge_idx = abs(sledge)
+            if not 0 <= edge_idx < len(self.edges):
+                raise ValueError(
+                    f"corrupt BSP: edge index {edge_idx} out of range "
+                    f"(max {len(self.edges) - 1})"
+                )
+            edge = self.edges[edge_idx]
             v = edge.v0 if sledge >= 0 else edge.v1
             verts.append(v)
         return verts
@@ -120,29 +133,56 @@ def _read_lumps(r: BinaryReader) -> list[Lump]:
 
 
 def _slice(data: bytes, lump: Lump) -> bytes:
+    if lump.offset < 0 or lump.size < 0:
+        raise ValueError(
+            f"invalid BSP lump bounds: offset={lump.offset}, size={lump.size}"
+        )
+    if lump.offset > len(data):
+        raise ValueError(
+            f"BSP lump offset {lump.offset} beyond end of file ({len(data)} bytes)"
+        )
+    end = lump.offset + lump.size
+    if end > len(data):
+        raise EOFError(
+            f"truncated BSP lump: offset={lump.offset}, size={lump.size}, "
+            f"file_size={len(data)}"
+        )
     return data[lump.offset:lump.offset + lump.size]
+
+
+def _warn_trailing_bytes(blob: bytes, size: int) -> None:
+    leftover = len(blob) % size
+    if leftover:
+        warnings.warn(
+            f"BSP lump has {leftover} trailing bytes (possible corruption)",
+            stacklevel=2,
+        )
 
 
 def _read_vertices(blob: bytes) -> list[Vec3]:
     r = BinaryReader(io.BytesIO(blob))
+    _warn_trailing_bytes(blob, 12)
     n = len(blob) // 12
     return [r.vec3() for _ in range(n)]
 
 
 def _read_edges(blob: bytes) -> list[Edge]:
     r = BinaryReader(io.BytesIO(blob))
+    _warn_trailing_bytes(blob, 4)
     n = len(blob) // 4
     return [Edge(*r.unpack("HH")) for _ in range(n)]
 
 
 def _read_ledges(blob: bytes) -> list[int]:
     r = BinaryReader(io.BytesIO(blob))
+    _warn_trailing_bytes(blob, 4)
     n = len(blob) // 4
     return [r.s32() for _ in range(n)]
 
 
 def _read_texinfos(blob: bytes) -> list[TexInfo]:
     r = BinaryReader(io.BytesIO(blob))
+    _warn_trailing_bytes(blob, 40)
     n = len(blob) // 40
     out: list[TexInfo] = []
     for _ in range(n):
@@ -159,6 +199,7 @@ def _read_texinfos(blob: bytes) -> list[TexInfo]:
 
 def _read_faces(blob: bytes) -> list[Face]:
     r = BinaryReader(io.BytesIO(blob))
+    _warn_trailing_bytes(blob, 20)
     n = len(blob) // 20
     out: list[Face] = []
     for _ in range(n):

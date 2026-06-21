@@ -39,3 +39,27 @@ def test_parse_origin_split() -> None:
 def test_parse_unterminated_entity_raises() -> None:
     with pytest.raises(ValueError):
         parse_entities('{ "k" "v"')
+
+
+def test_parse_unterminated_quoted_string_raises() -> None:
+    with pytest.raises(ValueError):
+        parse_entities('{ "message" "unterminated }')
+
+
+def test_parse_missing_value_after_key_raises() -> None:
+    with pytest.raises(ValueError):
+        parse_entities('{ "classname" }')
+
+
+def test_parse_empty_entity_block() -> None:
+    assert parse_entities("{ }") == [{}]
+
+
+def test_parse_entity_with_only_whitespace_and_comments() -> None:
+    text = """
+    {
+      // no key/value pairs here
+
+    }
+    """
+    assert parse_entities(text) == [{}]

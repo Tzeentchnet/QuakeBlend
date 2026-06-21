@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import io
 import struct
+import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import BinaryIO, List
@@ -101,8 +102,20 @@ class Bsp:
     def face_polygon(self, face: Face) -> List[int]:
         verts: list[int] = []
         for k in range(face.num_edges):
-            sedge = self.surfedges[face.first_edge + k]
-            edge = self.edges[abs(sedge)]
+            surfedge_idx = face.first_edge + k
+            if not 0 <= surfedge_idx < len(self.surfedges):
+                raise ValueError(
+                    f"corrupt BSP: surfedge index {surfedge_idx} out of range "
+                    f"(max {len(self.surfedges) - 1})"
+                )
+            sedge = self.surfedges[surfedge_idx]
+            edge_idx = abs(sedge)
+            if not 0 <= edge_idx < len(self.edges):
+                raise ValueError(
+                    f"corrupt BSP: edge index {edge_idx} out of range "
+                    f"(max {len(self.edges) - 1})"
+                )
+            edge = self.edges[edge_idx]
             verts.append(edge.v0 if sedge >= 0 else edge.v1)
         return verts
 
@@ -112,10 +125,34 @@ def _read_lumps(r: BinaryReader) -> list[Lump]:
 
 
 def _slice(data: bytes, lump: Lump) -> bytes:
+    if lump.offset < 0 or lump.size < 0:
+        raise ValueError(
+            f"invalid BSP lump bounds: offset={lump.offset}, size={lump.size}"
+        )
+    if lump.offset > len(data):
+        raise ValueError(
+            f"BSP lump offset {lump.offset} beyond end of file ({len(data)} bytes)"
+        )
+    end = lump.offset + lump.size
+    if end > len(data):
+        raise EOFError(
+            f"truncated BSP lump: offset={lump.offset}, size={lump.size}, "
+            f"file_size={len(data)}"
+        )
     return data[lump.offset:lump.offset + lump.size]
 
 
+def _warn_trailing_bytes(blob: bytes, size: int) -> None:
+    leftover = len(blob) % size
+    if leftover:
+        warnings.warn(
+            f"BSP lump has {leftover} trailing bytes (possible corruption)",
+            stacklevel=2,
+        )
+
+
 def _read_vertices(blob: bytes) -> list[Vec3]:
+    _warn_trailing_bytes(blob, 12)
     n = len(blob) // 12
     out = []
     for i in range(n):
@@ -125,17 +162,20 @@ def _read_vertices(blob: bytes) -> list[Vec3]:
 
 
 def _read_edges(blob: bytes) -> list[Edge]:
+    _warn_trailing_bytes(blob, 4)
     n = len(blob) // 4
     return [Edge(*struct.unpack_from("<HH", blob, i * 4)) for i in range(n)]
 
 
 def _read_surfedges(blob: bytes) -> list[int]:
+    _warn_trailing_bytes(blob, 4)
     n = len(blob) // 4
-    return list(struct.unpack(f"<{n}i", blob)) if n else []
+    return list(struct.unpack(f"<{n}i", blob[:n * 4])) if n else []
 
 
 def _read_faces(blob: bytes) -> list[Face]:
     SIZE = 20  # short, short, int, short, short, byte[4], int
+    _warn_trailing_bytes(blob, SIZE)
     n = len(blob) // SIZE
     out: list[Face] = []
     for i in range(n):
@@ -156,6 +196,7 @@ def _read_faces(blob: bytes) -> list[Face]:
 
 def _read_texinfos(blob: bytes) -> list[TexInfo]:
     SIZE = 76
+    _warn_trailing_bytes(blob, SIZE)
     n = len(blob) // SIZE
     out: list[TexInfo] = []
     for i in range(n):

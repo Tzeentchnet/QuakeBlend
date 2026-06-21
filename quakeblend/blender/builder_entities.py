@@ -7,6 +7,7 @@ import math
 import bpy
 
 from ..formats.entities import parse_origin
+from ..utils import log as qb_log
 
 
 def _to_blender_color(value: str) -> tuple[float, float, float]:
@@ -20,15 +21,30 @@ def _to_blender_color(value: str) -> tuple[float, float, float]:
     return (1.0, 1.0, 1.0)
 
 
+def _entity_label(entity: dict[str, str], classname: str) -> str:
+    targetname = entity.get("targetname")
+    return f"{classname} ({targetname})" if targetname else classname
+
+
 def build_entity(entity: dict[str, str], collection: bpy.types.Collection,
-                 *, scale: float) -> bpy.types.Object | None:
+                 *,
+                 scale: float,
+                 operator: bpy.types.Operator | None = None) -> bpy.types.Object | None:
     classname = entity.get("classname", "entity")
     origin_str = entity.get("origin")
     if not origin_str:
         return None
     try:
         ox, oy, oz = parse_origin(origin_str)
-    except ValueError:
+    except ValueError as exc:
+        message = (
+            f"Skipping entity {_entity_label(entity, classname)}: "
+            f"invalid origin '{origin_str}' ({exc})"
+        )
+        if operator is not None:
+            qb_log.report(operator, {"WARNING"}, message)
+        else:
+            qb_log.get_logger("blender").warning(message)
         return None
     location = (ox * scale, oy * scale, oz * scale)
 

@@ -33,8 +33,11 @@ class QuakeBlendPreferences(bpy.types.AddonPreferences):
         layout.prop(self, "default_wad_path")
 
 
-def get_prefs(context: bpy.types.Context) -> QuakeBlendPreferences:
-    return context.preferences.addons[PACKAGE].preferences  # type: ignore[return-value]
+def get_prefs(context: bpy.types.Context) -> QuakeBlendPreferences | None:
+    addon = context.preferences.addons.get(PACKAGE)
+    if addon is None:
+        return None
+    return addon.preferences  # type: ignore[return-value]
 
 
 def register() -> None:
