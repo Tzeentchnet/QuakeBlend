@@ -276,3 +276,26 @@ def to_standard_face(face: MapFace) -> MapFace:
         value=face.tex.value,
     )
     return MapFace(p1=face.p1, p2=face.p2, p3=face.p3, tex=new_tex)
+
+
+def to_standard_brush(brush: MapBrush) -> MapBrush:
+    """Convert a ``brushDef3``/``brushDef`` brush to an equivalent Standard brush.
+
+    If ``brush.faces`` are not already parsed brushDef3 faces (e.g. the brush
+    came straight from the top-level ``.map`` tokenizer with only
+    ``raw_payload`` populated), the payload is parsed first via
+    :func:`parse_brushdef3_block`. Each face's 2×3 texture matrix is then
+    decomposed into Standard xoffset/yoffset/rotation/xscale/yscale via
+    :func:`to_standard_face`.
+
+    Shared by :mod:`quakeblend.formats.map_convert` (cross-game export) and
+    the MAP import runner (mesh geometry import), so both call sites convert
+    brushDef3 brushes identically.
+
+    Raises ``ValueError`` if ``raw_payload`` is malformed.
+    """
+    parsed = brush
+    if not brush.faces or not all(f.tex.is_brushdef3 for f in brush.faces):
+        parsed = parse_brushdef3_block(brush.raw_payload)
+    new_faces = [to_standard_face(f) for f in parsed.faces]
+    return MapBrush(faces=new_faces, raw_kind="standard", raw_payload="")

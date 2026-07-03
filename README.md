@@ -4,26 +4,32 @@ Blender 5.0+ extension for importing **Quake 1, 2, and 3** map data and textures
 
 Repository: <https://github.com/Tzeentchnet/QuakeBlend>
 
-## Status
+## Features
 
-| Phase | Scope | Status |
-|------:|:------|:------:|
-| 0 | Project skeleton + manifest | done |
-| 1 | Palette / WAD / WAL parsers + materials + WAD-only operator | done |
-| 2 | Quake 1 `.map` + `.bsp` import (CSG → mesh, entities, lights) | done |
-| 3 | Quake 2 `.map` + `.bsp` import (WAL textures, surface flags) | done* |
-| 4 | Quake 3 `.map` + `.bsp` import (Bezier patches imported; `brushDef3` parsed and skipped with a warning) | done* |
-| 5 | Preferences, logging polish, packaged release | done |
-| 6 | `.map` export with cross-game conversion (Q1 ↔ Q2 ↔ Q3) | done |
-
-\* Q2 `.map` parses `contents flags value` trailing fields and the MAP
-importer consults *Texture Root* for `.wal` lookups; surface flag
-propagation onto Blender materials is best-effort. Q3 `.map` import
-tessellates `patchDef2` patches but `brushDef3` brushes are captured
-verbatim and skipped at import time with a warning (no brush geometry is
-built for them).
-
-Export is **explicitly out of scope** for this initial release.
+* **Import Quake 1, 2, and 3** `.map` and `.bsp` files — auto-detects the
+  BSP version (v29 / IBSP v38 / IBSP v46) and the MAP texture projection
+  (Standard vs Valve220) per face.
+* **CSG brush → mesh conversion** for `.map` files, including Quake 3
+  `brushDef3` brushes (texture matrix decomposed into Standard UV
+  parameters) and `patchDef2` Bezier patches (tessellated at a configurable
+  subdivision level).
+* **Full texture pipeline** for all three games: Quake 1 WAD2/WAD3 archives,
+  Quake 2 `.wal` textures (sky, warp, fullbright, and transparency surface
+  flags honored), and Quake 3 `.tga`/`.jpg`/`.png` images — resolved from a
+  configurable *Texture Root* folder or add-on preference. Q2 `contents
+  flags value` MAP trailing fields are parsed and propagated best-effort.
+* **Entity import** as native Blender objects: point lights (energy/color
+  from the `light`/`_color` keys), cameras for player starts, and empties
+  for everything else, with every key/value pair preserved as a custom
+  property.
+* **MAP export with cross-game conversion** (Q1 ↔ Q2 ↔ Q3): re-parses the
+  original source file, adds/strips trailing `contents flags value` fields,
+  converts `brushDef3` faces to Standard faces, tessellates or drops
+  `patchDef2` patches, remaps texture names via an optional JSON mapping,
+  and can fold Blender-side entity origin/property edits back into the
+  output.
+* **Configurable world scale** (default 1/32 — 32 Quake units per Blender
+  metre) on every import/export operator.
 
 ## Install
 
@@ -65,7 +71,8 @@ After installing, three import operators appear under *File → Import*:
   * *Import entities* / *Import lights* — toggle non-brush entities and
     `light*` classnames respectively.
   * *Patch tessellation level* — Q3 `patchDef2` subdivision (1–16, default
-    `5`); `brushDef3` brushes are parsed and skipped with a warning.
+    `5`). `brushDef3` brushes are converted to mesh geometry automatically
+    (texture matrix decomposed to Standard UV parameters).
   Quake 3 patches are tessellated to mesh and the original control grid is
   stored in `obj["qb_patch_control_grid"]` for future round-trip.
 * **Quake BSP (.bsp)** — auto-detects Q1 (v29), Q2 (IBSP v38), Q3 (IBSP v46).
@@ -134,7 +141,7 @@ both geometry and materials in the Blender viewport.
 | Q1 WAD | `quake.wad` (id1) | All textures appear as materials |
 | Q2 MAP | `base1.map` | Same brush rendering, surface flags propagate |
 | Q2 BSP | `base1.bsp` | WAL textures load, fullbright / sky materials emit |
-| Q3 MAP | `q3dm1.map` | `patchDef2` patches tessellated, `brushDef3` warns |
+| Q3 MAP | `q3dm1.map` | `patchDef2` patches tessellated, `brushDef3` brushes render as geometry |
 | Q3 BSP | `q3dm1.bsp` | Triangle soup + patches + meshverts all draw |
 | Reload | Re-run any import | No duplicate materials, no Python errors |
 
@@ -151,7 +158,7 @@ Two layers, separated so parsers are testable without Blender:
 python -m pytest
 ```
 
-The test suite exercises only the `formats` layer (52 tests).
+The test suite exercises only the `formats` layer (121 tests).
 Manual Blender smoke tests are listed above.
 
 ## Contributing

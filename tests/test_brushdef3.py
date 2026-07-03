@@ -62,6 +62,34 @@ def test_serialize_brushdef3_round_trip() -> None:
         assert math.isclose(f1.plane.dist, f2.plane.dist, abs_tol=1e-4)
 
 
+def test_to_standard_brush_from_raw_payload() -> None:
+    """A brush straight from the top-level tokenizer (only raw_payload set,
+    no parsed faces) should be reparsed and converted to Standard faces."""
+    raw = map_q1.MapBrush(raw_kind="brushDef3", raw_payload=CUBE_BRUSHDEF3)
+    converted = brushdef3.to_standard_brush(raw)
+    assert converted.raw_kind == "standard"
+    assert converted.raw_payload == ""
+    assert len(converted.faces) == 6
+    for face in converted.faces:
+        assert face.tex.name == "common/caulk"
+        assert not face.tex.is_brushdef3
+        assert face.tex.tex_matrix is None
+
+
+def test_to_standard_brush_matches_parse_then_convert() -> None:
+    """Whether called on an already-parsed brush or a raw-payload-only one,
+    the shared helper (used by both map_convert and the MAP import runner)
+    must produce identical Standard faces."""
+    parsed = brushdef3.parse_brushdef3_block(CUBE_BRUSHDEF3)
+    direct = brushdef3.to_standard_brush(parsed)
+    from_raw = brushdef3.to_standard_brush(
+        map_q1.MapBrush(raw_kind="brushDef3", raw_payload=CUBE_BRUSHDEF3)
+    )
+    assert len(direct.faces) == len(from_raw.faces) == 6
+    for f1, f2 in zip(direct.faces, from_raw.faces):
+        assert f1.tex == f2.tex
+
+
 def test_to_standard_face_decomposes_identity_matrix() -> None:
     brush = brushdef3.parse_brushdef3_block(CUBE_BRUSHDEF3)
     std = brushdef3.to_standard_face(brush.faces[0])

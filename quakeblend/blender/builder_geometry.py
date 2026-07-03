@@ -8,6 +8,7 @@ from typing import Iterable, Sequence
 import bmesh
 import bpy
 
+from ..formats.brushdef3 import base_axes_for_normal
 from ..formats.common import Vec3
 from ..formats.csg import BrushFace
 from ..formats.map_q1 import MapBrush, TexInfo as MapTexInfo
@@ -104,7 +105,7 @@ def _project_uv(tex: MapTexInfo, p: Vec3, tex_size: tuple[int, int],
     # idTech ``TextureAxisFromPlane`` table. Fall back to the X/Y plane
     # (most common for flat surfaces) when no normal is supplied.
     if normal is not None:
-        s_axis, t_axis = _texture_axes_from_normal(normal)
+        s_axis, t_axis = base_axes_for_normal(normal)
     else:
         s_axis = Vec3(1, 0, 0)
         t_axis = Vec3(0, -1, 0)
@@ -118,32 +119,6 @@ def _project_uv(tex: MapTexInfo, p: Vec3, tex_size: tuple[int, int],
     u = (sr / max(tex.xscale, 1e-6) + tex.xoffset) / max(w, 1)
     v = (tr / max(tex.yscale, 1e-6) + tex.yoffset) / max(h, 1)
     return u, v
-
-
-# ``TextureAxisFromPlane`` lookup from the original Quake editors. Each row is
-# ``(reference_normal, s_axis, t_axis)``; the row whose reference normal has
-# the largest positive dot product with the face normal wins.
-_BASE_AXES: tuple[tuple[Vec3, Vec3, Vec3], ...] = (
-    (Vec3(0, 0, 1),  Vec3(1, 0, 0),  Vec3(0, -1, 0)),   # floor
-    (Vec3(0, 0, -1), Vec3(1, 0, 0),  Vec3(0, -1, 0)),   # ceiling
-    (Vec3(1, 0, 0),  Vec3(0, 1, 0),  Vec3(0, 0, -1)),   # west wall
-    (Vec3(-1, 0, 0), Vec3(0, 1, 0),  Vec3(0, 0, -1)),   # east wall
-    (Vec3(0, 1, 0),  Vec3(1, 0, 0),  Vec3(0, 0, -1)),   # south wall
-    (Vec3(0, -1, 0), Vec3(1, 0, 0),  Vec3(0, 0, -1)),   # north wall
-)
-
-
-def _texture_axes_from_normal(normal: Vec3) -> tuple[Vec3, Vec3]:
-    best_dot = -1.0
-    best_s = _BASE_AXES[0][1]
-    best_t = _BASE_AXES[0][2]
-    for ref, s, t in _BASE_AXES:
-        d = normal.dot(ref)
-        if d > best_dot:
-            best_dot = d
-            best_s = s
-            best_t = t
-    return best_s, best_t
 
 
 # --------------------------------------------------------------- BSP faces

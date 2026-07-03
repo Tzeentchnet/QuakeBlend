@@ -10,7 +10,7 @@ import bpy
 from ..formats import bsp_q1, bsp_q2, bsp_q3, palette as palette_mod, patch as patch_mod, wal as wal_mod
 from ..formats.common import Vec3
 from ..utils.constants import BSP_VERSION_Q1, BSP_VERSION_Q2, BSP_VERSION_Q3, IBSP_MAGIC
-from ..utils import log as qb_log
+from ..utils import log as qb_log, paths as qb_paths
 from . import builder_entities, builder_geometry, builder_materials
 from .prefs import get_prefs
 
@@ -152,14 +152,17 @@ def run(operator: bpy.types.Operator, context: bpy.types.Context, filepath: str)
 def _resolve_wal(texture_root: Path | None, texture_name: str) -> Path | None:
     if texture_root is None:
         return None
+    # ``texture_name`` comes from the untrusted BSP file; reject any attempt
+    # to escape ``texture_root`` via absolute paths or ``..`` segments.
     candidates = [
-        texture_root / f"{texture_name}.wal",
-        texture_root / "textures" / f"{texture_name}.wal",
+        qb_paths.safe_join_under_root(texture_root, f"{texture_name}.wal"),
+        qb_paths.safe_join_under_root(texture_root, "textures", f"{texture_name}.wal"),
     ]
     for cand in candidates:
-        if cand.exists():
+        if cand is not None and cand.exists():
             return cand
-    # Case-insensitive walk fallback.
+    # Case-insensitive walk fallback (already contained under root because
+    # rglob only yields real paths beneath texture_root).
     needle = (texture_name + ".wal").lower().replace("\\", "/")
     if texture_root.exists():
         for path in texture_root.rglob("*.wal"):
@@ -278,7 +281,9 @@ _Q3_TEXTURE_EXTS = (".tga", ".jpg", ".jpeg", ".png")
 def _resolve_q3_texture(texture_root: Path | None, name: str) -> Path | None:
     if texture_root is None:
         return None
-    base = texture_root / name
+    base = qb_paths.safe_join_under_root(texture_root, name)
+    if base is None:
+        return None
     for ext in _Q3_TEXTURE_EXTS:
         cand = base.with_suffix(ext)
         if cand.exists():

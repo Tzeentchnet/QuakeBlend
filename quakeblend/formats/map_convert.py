@@ -93,17 +93,12 @@ def _normalize_brushdef3(brush: MapBrush, report: ConvertReport) -> MapBrush:
     if brush.raw_kind not in ("brushDef3", "brushDef"):
         return brush
     try:
-        # If our current model already has parsed faces with a tex_matrix,
-        # use them; otherwise re-parse from raw_payload.
-        parsed = brush
-        if not brush.faces or not all(f.tex.is_brushdef3 for f in brush.faces):
-            parsed = bd3_mod.parse_brushdef3_block(brush.raw_payload)
+        result = bd3_mod.to_standard_brush(brush)
     except (ValueError, StopIteration) as exc:
         report.errors.append(f"failed to parse brushDef3 brush: {exc}")
         return brush
-    new_faces = [bd3_mod.to_standard_face(f) for f in parsed.faces]
     report.brushdef3_converted += 1
-    return MapBrush(faces=new_faces, raw_kind="standard", raw_payload="")
+    return result
 
 
 # ----------------------------------------------------- patch tessellation

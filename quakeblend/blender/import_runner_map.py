@@ -6,9 +6,12 @@ from pathlib import Path
 
 import bpy
 
-from ..formats import map_q1, palette as palette_mod, patch as patch_mod, wad as wad_mod, wal as wal_mod
+from ..formats import (
+    brushdef3 as brushdef3_mod, map_q1, palette as palette_mod, patch as patch_mod,
+    wad as wad_mod, wal as wal_mod,
+)
 from ..formats.csg import BrushFace, brush_faces
-from ..utils import log as qb_log
+from ..utils import log as qb_log, paths as qb_paths
 from . import builder_entities, builder_geometry, builder_materials
 from .prefs import get_prefs
 
@@ -50,23 +53,27 @@ def _resolve_external_texture(texture_root: Path, name: str) -> tuple[Path, str]
     Searches both directly under the root and under a ``textures/`` subfolder, and
     falls back to a case-insensitive recursive walk.
     """
-    # Direct WAL candidates (Quake 2).
+    # Direct WAL candidates (Quake 2). ``name`` comes from the untrusted map
+    # file, so join it via ``safe_join_under_root`` to reject any attempt to
+    # escape ``texture_root`` via absolute paths or ``..`` segments.
     wal_candidates = [
-        texture_root / f"{name}.wal",
-        texture_root / "textures" / f"{name}.wal",
+        qb_paths.safe_join_under_root(texture_root, f"{name}.wal"),
+        qb_paths.safe_join_under_root(texture_root, "textures", f"{name}.wal"),
     ]
     for cand in wal_candidates:
-        if cand.exists():
+        if cand is not None and cand.exists():
             return cand, "wal"
     # Direct image candidates (Quake 3).
-    base = texture_root / name
-    for ext in _Q3_TEXTURE_EXTS:
-        cand = base.with_suffix(ext)
-        if cand.exists():
-            return cand, "image"
-    if base.exists() and base.suffix.lower() in _Q3_TEXTURE_EXTS:
-        return base, "image"
-    # Case-insensitive walk fallback for WAL.
+    base = qb_paths.safe_join_under_root(texture_root, name)
+    if base is not None:
+        for ext in _Q3_TEXTURE_EXTS:
+            cand = base.with_suffix(ext)
+            if cand.exists():
+                return cand, "image"
+        if base.exists() and base.suffix.lower() in _Q3_TEXTURE_EXTS:
+            return base, "image"
+    # Case-insensitive walk fallback for WAL (already contained under root
+    # because rglob only yields real paths beneath texture_root).
     needle = (name + ".wal").lower().replace("\\", "/")
     if texture_root.exists():
         for path in texture_root.rglob("*.wal"):
@@ -169,6 +176,14 @@ def run(operator: bpy.types.Operator, context: bpy.types.Context, filepath: str)
                 _build_patch(operator, brush, ent_coll,
                              f"{classname}_patch_{brush_idx}", scale=scale)
                 continue
+            if brush.raw_kind in ("brushDef3", "brushDef"):
+                try:
+                    brush = brushdef3_mod.to_standard_brush(brush)
+                except (ValueError, StopIteration) as exc:
+                    operator.report({"WARNING"},
+                                    f"Skipping {brush.raw_kind} brush in entity "
+                                    f"{ent_idx}: {exc}")
+                    continue
             if brush.raw_kind != "standard":
                 operator.report({"WARNING"},
                                 f"Skipping {brush.raw_kind} brush in entity {ent_idx} "
