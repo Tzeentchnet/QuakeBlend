@@ -162,6 +162,18 @@ def read_exact(stream: BinaryIO, n: int) -> bytes:
     return data
 
 
+def parse_finite_float(value: str, *, context: str = "number") -> float:
+    parsed = float(value)
+    if not math.isfinite(parsed):
+        raise ValueError(f"{context} must be finite, got {value!r}")
+    return parsed
+
+
+def require_finite(values: Iterable[float], *, context: str) -> None:
+    if not all(math.isfinite(value) for value in values):
+        raise ValueError(f"{context} must contain only finite values")
+
+
 def chunks(seq: bytes, size: int) -> Iterable[bytes]:
     for i in range(0, len(seq), size):
         yield seq[i : i + size]

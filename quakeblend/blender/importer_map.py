@@ -26,12 +26,14 @@ class IMPORT_OT_quake_map(bpy.types.Operator, ImportHelper):
         min=0.0001,
         max=10.0,
     )
-    projection: bpy.props.EnumProperty(  # type: ignore[valid-type]
-        name="Texture projection",
+    source_game: bpy.props.EnumProperty(  # type: ignore[valid-type]
+        name="Source game",
+        description="MAP dialect; Auto detects syntax, while an override resolves ambiguous files",
         items=(
-            ("AUTO", "Auto", "Detect Standard vs Valve220 per face"),
-            ("STANDARD", "Standard", "Force standard Quake projection"),
-            ("VALVE220", "Valve220", "Force Valve220 projection"),
+            ("AUTO", "Auto", "Detect Q2/Q3-specific syntax, otherwise use Quake 1"),
+            ("Q1", "Quake 1", "Treat the file as a Quake 1 MAP"),
+            ("Q2", "Quake 2", "Treat the file as a Quake 2 MAP"),
+            ("Q3", "Quake 3", "Treat the file as a Quake 3 MAP"),
         ),
         default="AUTO",
     )
@@ -64,9 +66,11 @@ class IMPORT_OT_quake_map(bpy.types.Operator, ImportHelper):
 
     def execute(self, context: bpy.types.Context) -> set[str]:
         from . import import_runner_map
+        from .transaction import ImportTransaction
 
         try:
-            import_runner_map.run(self, context, os.fspath(self.filepath))
+            with ImportTransaction():
+                import_runner_map.run(self, context, os.fspath(self.filepath))
         except Exception as exc:  # pragma: no cover - surfaced through UI
             self.report({"ERROR"}, f"MAP import failed: {exc}")
             return {"CANCELLED"}

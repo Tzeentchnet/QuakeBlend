@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from quakeblend.formats.entities import parse_entities, parse_origin
+from quakeblend.formats.entities import parse_color, parse_entities, parse_origin
 
 
 def test_parse_simple() -> None:
@@ -34,6 +34,29 @@ def test_parse_quoted_escape() -> None:
 
 def test_parse_origin_split() -> None:
     assert parse_origin("12 -3.5 7") == (12.0, -3.5, 7.0)
+
+
+@pytest.mark.parametrize("value", ["nan 0 0", "0 inf 0", "0 0 -inf"])
+def test_parse_origin_rejects_non_finite_values(value: str) -> None:
+    with pytest.raises(ValueError, match="origin component must be finite"):
+        parse_origin(value)
+
+
+def test_parse_color_accepts_normalized_values() -> None:
+    assert parse_color("1 0.5 0") == (1.0, 0.5, 0.0)
+
+
+def test_parse_color_accepts_byte_values() -> None:
+    assert parse_color("255 128 0") == (1.0, 128.0 / 255.0, 0.0)
+
+
+def test_parse_color_clamps_values() -> None:
+    assert parse_color("300 -10 128") == (1.0, 0.0, 128.0 / 255.0)
+
+
+def test_parse_color_rejects_invalid_values() -> None:
+    with pytest.raises(ValueError, match="color"):
+        parse_color("red green blue")
 
 
 def test_parse_unterminated_entity_raises() -> None:

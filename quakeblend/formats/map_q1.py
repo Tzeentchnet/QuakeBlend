@@ -32,7 +32,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional
 
-from .common import Plane, Vec3
+from ..utils.constants import MAX_BRUSH_FACES
+from .common import Plane, Vec3, parse_finite_float
 
 
 # ----------------------------------------------------------------- dataclasses
@@ -56,6 +57,7 @@ class TexInfo:
     surface_flags: int = 0
     contents: int = 0
     value: int = 0
+    has_q2_trailing_fields: bool = False
     # Q3 brushDef3 2×3 texture matrix (None unless this came from brushDef3).
     # Stored as ((a, b, c), (d, e, f)); see ``quakeblend.formats.brushdef3``.
     tex_matrix: Optional[
@@ -144,14 +146,28 @@ class _Tokenizer:
             raise ValueError("unexpected end of file")
         c = self.text[self.i]
         if c == '"':
-            j = self.i + 1
-            while j < self.n and self.text[j] != '"':
-                j += 1
-            if j >= self.n:
-                raise ValueError("unterminated quoted string")
-            tok = self.text[self.i + 1:j]
-            self.i = j + 1
-            return tok
+            self.i += 1
+            start = self.i
+            out: list[str] = []
+            while self.i < self.n:
+                char = self.text[self.i]
+                if char == "\\" and self.i + 1 < self.n:
+                    out.append(self.text[start:self.i])
+                    escaped = self.text[self.i + 1]
+                    out.append(
+                        {"n": "\n", "t": "\t", "\\": "\\", '"': '"'}.get(
+                            escaped, escaped
+                        )
+                    )
+                    self.i += 2
+                    start = self.i
+                    continue
+                if char == '"':
+                    out.append(self.text[start:self.i])
+                    self.i += 1
+                    return "".join(out)
+                self.i += 1
+            raise ValueError("unterminated quoted string")
         if c in "(){}[]":
             self.i += 1
             return c
@@ -171,25 +187,69 @@ class _Tokenizer:
         self._skip_ws()
         return self.i >= self.n
 
+    def capture_braced_block(self, kind: str) -> str:
+        self._skip_ws()
+        if self.i >= self.n or self.text[self.i] != "{":
+            raise ValueError(f"expected '{{' opening {kind} block")
+        start = self.i
+        depth = 0
+        while self.i < self.n:
+            char = self.text[self.i]
+            if char == '"':
+                self.i += 1
+                while self.i < self.n:
+                    if self.text[self.i] == "\\" and self.i + 1 < self.n:
+                        self.i += 2
+                        continue
+                    if self.text[self.i] == '"':
+                        self.i += 1
+                        break
+                    self.i += 1
+                continue
+            if char == "/" and self.i + 1 < self.n:
+                following = self.text[self.i + 1]
+                if following == "/":
+                    self.i += 2
+                    while self.i < self.n and self.text[self.i] != "\n":
+                        self.i += 1
+                    continue
+                if following == "*":
+                    self.i += 2
+                    while self.i + 1 < self.n and self.text[self.i:self.i + 2] != "*/":
+                        self.i += 1
+                    if self.i + 1 >= self.n:
+                        raise ValueError(f"unterminated {kind} block")
+                    self.i += 2
+                    continue
+            if char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+                if depth == 0:
+                    self.i += 1
+                    return self.text[start:self.i]
+            self.i += 1
+        raise ValueError(f"unterminated {kind} block")
+
 
 # ---------------------------------------------------------------- parsing
 
 
 def _parse_vec3(t: _Tokenizer) -> Vec3:
     t.expect("(")
-    x = float(t.next())
-    y = float(t.next())
-    z = float(t.next())
+    x = parse_finite_float(t.next(), context="plane coordinate")
+    y = parse_finite_float(t.next(), context="plane coordinate")
+    z = parse_finite_float(t.next(), context="plane coordinate")
     t.expect(")")
     return Vec3(x, y, z)
 
 
 def _parse_valve_axis(t: _Tokenizer) -> tuple[Vec3, float]:
     t.expect("[")
-    x = float(t.next())
-    y = float(t.next())
-    z = float(t.next())
-    off = float(t.next())
+    x = parse_finite_float(t.next(), context="Valve220 axis")
+    y = parse_finite_float(t.next(), context="Valve220 axis")
+    z = parse_finite_float(t.next(), context="Valve220 axis")
+    off = parse_finite_float(t.next(), context="Valve220 offset")
     t.expect("]")
     return Vec3(x, y, z), off
 
@@ -206,15 +266,15 @@ def _parse_face(t: _Tokenizer) -> MapFace:
     if nxt == "[":
         s_axis, s_off = _parse_valve_axis(t)
         t_axis, t_off = _parse_valve_axis(t)
-        rot = float(t.next())
-        xs = float(t.next())
-        ys = float(t.next())
+        rot = parse_finite_float(t.next(), context="texture rotation")
+        xs = parse_finite_float(t.next(), context="texture scale")
+        ys = parse_finite_float(t.next(), context="texture scale")
     else:
-        xoff = float(t.next())
-        yoff = float(t.next())
-        rot = float(t.next())
-        xs = float(t.next())
-        ys = float(t.next())
+        xoff = parse_finite_float(t.next(), context="texture offset")
+        yoff = parse_finite_float(t.next(), context="texture offset")
+        rot = parse_finite_float(t.next(), context="texture rotation")
+        xs = parse_finite_float(t.next(), context="texture scale")
+        ys = parse_finite_float(t.next(), context="texture scale")
 
     # Q2 trailing tokens are optional and numeric: ``contents surface_flags value``.
     # See ``map_q2.py`` for the canonical order; matches Quake 2 ``.map`` syntax.
@@ -242,12 +302,14 @@ def _parse_face(t: _Tokenizer) -> MapFace:
             t_axis=t_axis, t_offset=t_off,
             rotation=rot, xscale=xs, yscale=ys,
             surface_flags=surface, contents=contents, value=value,
+            has_q2_trailing_fields=bool(trailing),
         )
     else:
         tex = TexInfo(
             name=name, xoffset=xoff, yoffset=yoff,
             rotation=rot, xscale=xs, yscale=ys,
             surface_flags=surface, contents=contents, value=value,
+            has_q2_trailing_fields=bool(trailing),
         )
 
     return MapFace(p1=p1, p2=p2, p3=p3, tex=tex)
@@ -264,36 +326,18 @@ def _parse_brush(t: _Tokenizer) -> MapBrush:
             t.next()
             return brush
         if peek == "(":
+            if len(brush.faces) >= MAX_BRUSH_FACES:
+                raise ValueError(
+                    f"brush exceeds maximum face count {MAX_BRUSH_FACES}"
+                )
             brush.faces.append(_parse_face(t))
             continue
         # Q3 brush primitives / patches start with an identifier token.
         word = t.next()
-        if word in ("brushDef", "brushDef3"):
-            # Capture until matching brace; handled by the Q3 module.
-            depth = 1
-            start = t.i
-            while t.i < t.n and depth > 0:
-                c = t.text[t.i]
-                if c == "{":
-                    depth += 1
-                elif c == "}":
-                    depth -= 1
-                t.i += 1
+        if word in ("brushDef", "brushDef3", "patchDef2", "patchDef3"):
             brush.raw_kind = word
-            brush.raw_payload = t.text[start:t.i - 1]
-            return brush
-        if word in ("patchDef2", "patchDef3"):
-            depth = 1
-            start = t.i
-            while t.i < t.n and depth > 0:
-                c = t.text[t.i]
-                if c == "{":
-                    depth += 1
-                elif c == "}":
-                    depth -= 1
-                t.i += 1
-            brush.raw_kind = word
-            brush.raw_payload = t.text[start:t.i - 1]
+            brush.raw_payload = t.capture_braced_block(word)
+            t.expect("}")
             return brush
         raise ValueError(f"unrecognised brush token {word!r}")
 
@@ -329,3 +373,21 @@ def parse(text: str) -> MapFile:
 
 def parse_path(path: str | Path) -> MapFile:
     return parse(Path(path).read_text(encoding="latin-1"))
+
+
+def detect_game(map_file: MapFile) -> str:
+    """Detect the MAP dialect from syntax that survives parsing."""
+    brushes = (brush for entity in map_file.entities for brush in entity.brushes)
+    if any(
+        brush.raw_kind in ("brushDef3", "brushDef", "patchDef2", "patchDef3")
+        for brush in brushes
+    ):
+        return "q3"
+    if any(
+        face.tex.has_q2_trailing_fields
+        for entity in map_file.entities
+        for brush in entity.brushes
+        for face in brush.faces
+    ):
+        return "q2"
+    return "q1"

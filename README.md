@@ -14,8 +14,9 @@ Repository: <https://github.com/Tzeentchnet/QuakeBlend>
   parameters) and `patchDef2` Bezier patches (tessellated at a configurable
   subdivision level).
 * **Full texture pipeline** for all three games: Quake 1 WAD2/WAD3 archives,
-  Quake 2 `.wal` textures (sky, warp, fullbright, and transparency surface
-  flags honored), and Quake 3 `.tga`/`.jpg`/`.png` images — resolved from a
+  Quake 2 `.wal` textures (sky, fullbright, and transparency surface flags
+  honored; warp/flowing flags are parsed but not animated), and Quake 3
+  `.tga`/`.jpg`/`.png` images — resolved from a
   configurable *Texture Root* folder or add-on preference. Q2 `contents
   flags value` MAP trailing fields are parsed and propagated best-effort.
 * **Entity import** as native Blender objects: point lights (energy/color
@@ -61,12 +62,13 @@ After installing, three import operators appear under *File → Import*:
 * **Quake MAP (.map)** — import any Q1/Q2/Q3 `.map` text file. Operator
   options:
   * *Scale* — world-unit scale (default `1/32`).
-  * *Texture projection* — `Auto` (per-face Standard vs Valve220 detection),
-    or force `Standard`/`Valve220`.
-  * *Texture root* — folder searched for external textures. Quake 2 `.wal`
-    files are looked up directly and under a `textures/` subfolder; Quake 3
-    image textures (`.tga` / `.jpg` / `.jpeg` / `.png`) are resolved by
-    face-texture name. Falls back to the add-on preference when blank.
+  * *Source game* — `Auto` detects Q2/Q3-specific syntax, or choose Q1/Q2/Q3
+    explicitly for ambiguous files. Standard vs Valve220 projection is always
+    detected per face.
+  * *Texture root* — folder indexed recursively once per import for external
+    textures. Quake 2 `.wal` and Quake 3 image textures (`.tga` / `.jpg` /
+    `.jpeg` / `.png`) are matched case-insensitively by face-texture name.
+    Falls back to the add-on preference when blank.
   * *WAD files* — semicolon-separated list of Quake 1 `.wad` files.
   * *Import entities* / *Import lights* — toggle non-brush entities and
     `light*` classnames respectively.
@@ -80,6 +82,10 @@ After installing, three import operators appear under *File → Import*:
   `.tga` / `.jpg` / `.png` texture files.
 * **Quake WAD (.wad)** — load a WAD2/WAD3 archive as a set of materials.
 
+If an import fails, QuakeBlend removes collections, objects, meshes, materials,
+images, lights, and cameras created by that operation. Existing Blender data is
+left untouched.
+
 ### Exporting MAP files
 
 A single export operator is registered under *File → Export*: **Quake MAP
@@ -91,9 +97,10 @@ cached on the imported root collection (`obj["qb_source_map"]`). This means
 brush geometry edits made in Blender after import are NOT included in the
 exported file. Entity property edits (origin, classname, key/value pairs)
 can optionally be folded in via the *Apply entity edits from scene* toggle:
-objects carrying `qb_entity_index` contribute their location (÷ import
-scale) as the entity's `origin`, and any custom properties named
-`qb_prop_<key>` overwrite the matching key.
+entity anchor objects carrying `qb_entity_role = "ENTITY"` and
+`qb_entity_index` contribute their location (÷ the collection's saved import
+scale) as the entity's `origin`, and custom properties named `qb_prop_<key>`
+overwrite the matching key.
 
 **Cross-game conversion.** Pick a *Target game*:
 
@@ -103,8 +110,9 @@ scale) as the entity's `origin`, and any custom properties named
   `patchDef2` patches into thin extruded brush quads.
 * **Q2** — always emits trailing `contents flags value` ints; otherwise
   identical to Q1 export.
-* **Q3** — preserves `brushDef3` and `patchDef2` blocks verbatim. Standard
-  faces are passed through; *patch handling = Keep* is only legal here.
+* **Q3** — preserves `brushDef3`, `patchDef2`, and opaque `patchDef3` blocks.
+  Standard faces are passed through; *patch handling = Keep* is only legal
+  here.
 
 **Other options:**
 
@@ -121,8 +129,9 @@ scale) as the entity's `origin`, and any custom properties named
 
 **Limitations.** BSP → MAP export is not supported (the exporter rejects
 collections without `qb_source_map`). Lightmap, shader, and `.wal`/image
-texture files are never written; only `.map` text. Q3 `patchDef3` blocks
-are not interpreted and are dropped on conversion.
+texture files are never written; only `.map` text. Q3 `patchDef3` blocks are
+preserved for Q3 output but are not interpreted and are dropped with a warning
+when converting to Q1/Q2.
 
 ### Coordinate scale
 
@@ -158,8 +167,28 @@ Two layers, separated so parsers are testable without Blender:
 python -m pytest
 ```
 
-The test suite exercises only the `formats` layer (121 tests).
-Manual Blender smoke tests are listed above.
+The test suite exercises the pure-Python formats and utility layers.
+
+To exercise registration, materials, rollback, MAP/BSP/WAD imports, MAP
+export, and unregister/re-register against an installed extension, run:
+
+```powershell
+$blender = "C:\Program Files\Blender Foundation\Blender 5.1\blender.exe"
+pwsh ./scripts/build_extension.ps1 -BlenderExe $blender
+$zip = (Get-ChildItem ./dist/quakeblend-*.zip |
+  Sort-Object LastWriteTime -Descending | Select-Object -First 1).FullName
+& $blender --command extension install-file -r user_default -e $zip
+& $blender --background --python scripts/blender_smoke.py -- `
+  --extension-root bl_ext.user_default.quakeblend
+```
+
+A successful run ends with:
+
+```text
+QUAKEBLEND_SMOKE_OK registration materials transaction map bsp wad export unregister
+```
+
+The manual viewport checks listed above still cover visual rendering quality.
 
 ## Contributing
 

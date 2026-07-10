@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import bpy
 
-PACKAGE = __package__.split(".")[0] if __package__ else "quakeblend"
+PACKAGE = (
+    __package__.rsplit(".", 1)[0]
+    if __package__ and "." in __package__
+    else "quakeblend"
+)
 
 
 class QuakeBlendPreferences(bpy.types.AddonPreferences):

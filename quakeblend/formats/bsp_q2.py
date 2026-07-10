@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import BinaryIO, List
 
 from ..utils.constants import BSP_VERSION_Q2, IBSP_MAGIC
-from .common import BinaryReader, Vec3
+from .common import BinaryReader, Vec3, require_finite
 from .entities import parse_entities
 
 NUM_LUMPS = 19
@@ -99,6 +99,50 @@ class Bsp:
     texinfos: List[TexInfo] = field(default_factory=list)
     lighting: bytes = b""
 
+    def validate(self) -> None:
+        for vertex_index, vertex in enumerate(self.vertices):
+            require_finite(
+                vertex,
+                context=f"corrupt BSP: vertex {vertex_index}",
+            )
+        for texinfo_index, texinfo in enumerate(self.texinfos):
+            require_finite(
+                (*texinfo.u_axis, texinfo.u_offset,
+                 *texinfo.v_axis, texinfo.v_offset),
+                context=f"corrupt BSP: texinfo {texinfo_index} projection",
+            )
+        for edge_index, edge in enumerate(self.edges):
+            for vertex_index in (edge.v0, edge.v1):
+                if not 0 <= vertex_index < len(self.vertices):
+                    raise ValueError(
+                        f"corrupt BSP: edge {edge_index} vertex {vertex_index} "
+                        f"out of range (vertex_count={len(self.vertices)})"
+                    )
+        for face_index, face in enumerate(self.faces):
+            if face.num_edges < 0:
+                raise ValueError(f"corrupt BSP: face {face_index} has negative edge count")
+            if (face.first_edge < 0
+                    or face.first_edge + face.num_edges > len(self.surfedges)):
+                raise ValueError(
+                    f"corrupt BSP: face {face_index} surfedge range "
+                    f"[{face.first_edge}, {face.first_edge + face.num_edges}) out of range "
+                    f"(surfedge_count={len(self.surfedges)})"
+                )
+            if not 0 <= face.texinfo_id < len(self.texinfos):
+                raise ValueError(
+                    f"corrupt BSP: face {face_index} texinfo {face.texinfo_id} "
+                    f"out of range (texinfo_count={len(self.texinfos)})"
+                )
+            self.face_polygon(face)
+        for texinfo_index, texinfo in enumerate(self.texinfos):
+            if (texinfo.next_texinfo != -1
+                    and not 0 <= texinfo.next_texinfo < len(self.texinfos)):
+                raise ValueError(
+                    f"corrupt BSP: texinfo {texinfo_index} next_texinfo "
+                    f"{texinfo.next_texinfo} out of range "
+                    f"(texinfo_count={len(self.texinfos)})"
+                )
+
     def face_polygon(self, face: Face) -> List[int]:
         verts: list[int] = []
         for k in range(face.num_edges):
@@ -116,7 +160,13 @@ class Bsp:
                     f"(max {len(self.edges) - 1})"
                 )
             edge = self.edges[edge_idx]
-            verts.append(edge.v0 if sedge >= 0 else edge.v1)
+            vertex_index = edge.v0 if sedge >= 0 else edge.v1
+            if not 0 <= vertex_index < len(self.vertices):
+                raise ValueError(
+                    f"corrupt BSP: vertex index {vertex_index} out of range "
+                    f"(max {len(self.vertices) - 1})"
+                )
+            verts.append(vertex_index)
         return verts
 
 

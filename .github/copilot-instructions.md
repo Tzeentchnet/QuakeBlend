@@ -3,7 +3,7 @@
 ## Build & Test
 
 ```powershell
-# Run all tests (52 tests, formats layer only)
+# Run all pure-Python tests
 python -m pytest
 
 # Run a single test file

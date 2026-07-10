@@ -30,11 +30,6 @@ class IMPORT_OT_quake_bsp(bpy.types.Operator, ImportHelper):
     )
     import_entities: bpy.props.BoolProperty(name="Import entities", default=True)  # type: ignore[valid-type]
     import_lights: bpy.props.BoolProperty(name="Import lights", default=True)  # type: ignore[valid-type]
-    bake_lightmaps: bpy.props.BoolProperty(  # type: ignore[valid-type]
-        name="Bake lightmaps",
-        description="Import compiled lightmaps as a second UV channel + image",
-        default=False,
-    )
     patch_level: bpy.props.IntProperty(  # type: ignore[valid-type]
         name="Patch tessellation level",
         description="Q3 patch subdivision (segments per Bezier span)",
@@ -45,9 +40,11 @@ class IMPORT_OT_quake_bsp(bpy.types.Operator, ImportHelper):
 
     def execute(self, context: bpy.types.Context) -> set[str]:
         from . import import_runner_bsp
+        from .transaction import ImportTransaction
 
         try:
-            import_runner_bsp.run(self, context, os.fspath(self.filepath))
+            with ImportTransaction():
+                import_runner_bsp.run(self, context, os.fspath(self.filepath))
         except Exception as exc:  # pragma: no cover
             self.report({"ERROR"}, f"BSP import failed: {exc}")
             return {"CANCELLED"}

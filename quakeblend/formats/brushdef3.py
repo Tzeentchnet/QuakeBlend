@@ -23,7 +23,7 @@ from __future__ import annotations
 import math
 from typing import List
 
-from .common import Plane, Vec3
+from .common import Plane, Vec3, parse_finite_float
 from .map_q1 import MapBrush, MapFace, TexInfo
 
 
@@ -144,18 +144,26 @@ def parse_brushdef3_block(payload: str) -> MapBrush:
         try:
             # Plane: ( nx ny nz d )
             i = expect(i, "(")
-            nx = float(tokens[i]); ny = float(tokens[i + 1])
-            nz = float(tokens[i + 2]); dist = float(tokens[i + 3])
+            nx = parse_finite_float(tokens[i], context="brushDef3 plane")
+            ny = parse_finite_float(tokens[i + 1], context="brushDef3 plane")
+            nz = parse_finite_float(tokens[i + 2], context="brushDef3 plane")
+            dist = parse_finite_float(tokens[i + 3], context="brushDef3 plane")
             i += 4
             i = expect(i, ")")
             # Texture matrix: ( ( a b c ) ( d e f ) )
             i = expect(i, "(")
             i = expect(i, "(")
-            row0 = [float(tokens[i]), float(tokens[i + 1]), float(tokens[i + 2])]
+            row0 = [
+                parse_finite_float(tokens[i + offset], context="brushDef3 matrix")
+                for offset in range(3)
+            ]
             i += 3
             i = expect(i, ")")
             i = expect(i, "(")
-            row1 = [float(tokens[i]), float(tokens[i + 1]), float(tokens[i + 2])]
+            row1 = [
+                parse_finite_float(tokens[i + offset], context="brushDef3 matrix")
+                for offset in range(3)
+            ]
             i += 3
             i = expect(i, ")")
             i = expect(i, ")")
@@ -184,6 +192,7 @@ def parse_brushdef3_block(payload: str) -> MapBrush:
                 tex_matrix=((row0[0], row0[1], row0[2]),
                             (row1[0], row1[1], row1[2])),
                 contents=contents, surface_flags=surface_flags, value=value,
+                has_q2_trailing_fields=bool(trailing),
             )
             faces.append(MapFace(p1=p1, p2=p2, p3=p3, tex=tex))
         except (IndexError, ValueError) as exc:
@@ -274,6 +283,7 @@ def to_standard_face(face: MapFace) -> MapFace:
         contents=face.tex.contents,
         surface_flags=face.tex.surface_flags,
         value=face.tex.value,
+        has_q2_trailing_fields=face.tex.has_q2_trailing_fields,
     )
     return MapFace(p1=face.p1, p2=face.p2, p3=face.p3, tex=new_tex)
 

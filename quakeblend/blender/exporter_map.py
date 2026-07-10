@@ -27,23 +27,37 @@ def _find_source_collection(context: bpy.types.Context) -> bpy.types.Collection 
     Search order: active collection (and ancestors), then any top-level scene
     collection child carrying ``qb_source_map``.
     """
-    coll = getattr(context, "collection", None)
-    visited: set[str] = set()
-    while coll is not None and coll.name not in visited:
-        visited.add(coll.name)
-        if "qb_source_map" in coll:
-            return coll
-        # Walk up to the parent collection (Blender doesn't expose .parent
-        # directly; iterate scene children to find one whose children include us).
-        parent = _find_parent(context.scene.collection, coll)
-        if parent is None or parent is context.scene.collection:
-            break
-        coll = parent
-    # Fallback: scan top-level children.
-    for child in context.scene.collection.children:
+    starts: list[bpy.types.Collection] = []
+    active_object = getattr(context, "active_object", None)
+    if active_object is not None:
+        starts.extend(active_object.users_collection)
+    active_collection = getattr(context, "collection", None)
+    if active_collection is not None and active_collection not in starts:
+        starts.append(active_collection)
+
+    for start in starts:
+        coll: bpy.types.Collection | None = start
+        visited: set[str] = set()
+        while coll is not None and coll.name not in visited:
+            visited.add(coll.name)
+            if "qb_source_map" in coll:
+                return coll
+            parent = _find_parent(context.scene.collection, coll)
+            if parent is None or parent is context.scene.collection:
+                break
+            coll = parent
+
+    candidates = _source_collections(context.scene.collection)
+    return candidates[0] if len(candidates) == 1 else None
+
+
+def _source_collections(root: bpy.types.Collection) -> list[bpy.types.Collection]:
+    found: list[bpy.types.Collection] = []
+    for child in root.children:
         if "qb_source_map" in child:
-            return child
-    return None
+            found.append(child)
+        found.extend(_source_collections(child))
+    return found
 
 
 def _find_parent(root: bpy.types.Collection,
@@ -71,12 +85,13 @@ def _apply_entity_overlay(mf: map_q1.MapFile,
 
     def visit(coll: bpy.types.Collection) -> None:
         for obj in coll.objects:
-            if "qb_entity_index" in obj:
-                try:
-                    idx = int(obj["qb_entity_index"])
-                except (TypeError, ValueError):
-                    continue
-                by_index[idx] = obj
+            if obj.get("qb_entity_role") != "ENTITY":
+                continue
+            try:
+                idx = int(obj["qb_entity_index"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            by_index.setdefault(idx, obj)
         for child in coll.children:
             visit(child)
 
@@ -85,16 +100,18 @@ def _apply_entity_overlay(mf: map_q1.MapFile,
         if idx < 0 or idx >= len(mf.entities):
             continue
         ent = mf.entities[idx]
-        # Origin from object location (skip worldspawn).
-        if ent.properties.get("classname") != "worldspawn":
-            x, y, z = obj.location
-            ent.properties["origin"] = (
-                f"{x * inv_scale:g} {y * inv_scale:g} {z * inv_scale:g}"
-            )
         # Custom property overrides.
         for key in obj.keys():
             if key.startswith("qb_prop_"):
                 ent.properties[key[len("qb_prop_"):]] = str(obj[key])
+        # Origin from object location (skip worldspawn and entities which did
+        # not have a valid source origin).
+        if (ent.properties.get("classname") != "worldspawn"
+                and bool(obj.get("qb_entity_has_origin", False))):
+            x, y, z = obj.location
+            ent.properties["origin"] = (
+                f"{x * inv_scale:g} {y * inv_scale:g} {z * inv_scale:g}"
+            )
 
 
 class EXPORT_OT_quake_map(bpy.types.Operator, ExportHelper):
@@ -170,9 +187,18 @@ class EXPORT_OT_quake_map(bpy.types.Operator, ExportHelper):
     def execute(self, context: bpy.types.Context) -> set[str]:  # noqa: D401
         coll = _find_source_collection(context)
         if coll is None:
-            self.report({"ERROR"},
-                        "No imported MAP collection found. Select a "
-                        "QuakeBlend-imported collection or its child first.")
+            source_count = len(_source_collections(context.scene.collection))
+            if source_count > 1:
+                message = (
+                    f"Found {source_count} imported MAP collections. Select an object "
+                    "or collection inside the MAP to export."
+                )
+            else:
+                message = (
+                    "No imported MAP collection found. Select a "
+                    "QuakeBlend-imported collection or its child first."
+                )
+            self.report({"ERROR"}, message)
             return {"CANCELLED"}
         source_path = coll.get("qb_source_map")
         if not source_path:
@@ -181,7 +207,6 @@ class EXPORT_OT_quake_map(bpy.types.Operator, ExportHelper):
                         "BSP→MAP export is not supported.")
             return {"CANCELLED"}
         source_game: str = coll.get("qb_source_game", "q1")
-        source_projection: str = coll.get("qb_source_projection", "standard")
 
         target = self.target_game.lower() if self.target_game != "AUTO" else source_game
         if target not in ("q1", "q2", "q3"):
@@ -197,7 +222,7 @@ class EXPORT_OT_quake_map(bpy.types.Operator, ExportHelper):
 
         # Optional entity overlay from scene objects.
         if self.use_scene_entity_edits:
-            scale = float(getattr(context.scene, "qb_import_scale", 1.0 / 32.0))
+            scale = float(coll.get("qb_import_scale", 1.0 / 32.0))
             _apply_entity_overlay(mf, coll, scale)
 
         # Optional texture map.
@@ -253,14 +278,28 @@ class EXPORT_OT_quake_map(bpy.types.Operator, ExportHelper):
             self.report({"ERROR"}, f"Conversion failed: {exc}")
             return {"CANCELLED"}
 
-        # Pick projection: AUTO inherits source projection.
+        for warning in report.warnings:
+            self.report({"WARNING"}, warning)
+        if report.errors:
+            for error in report.errors:
+                self.report({"ERROR"}, error)
+            self.report(
+                {"ERROR"},
+                f"Export cancelled because conversion reported {len(report.errors)} error(s)",
+            )
+            return {"CANCELLED"}
+
+        # Auto preserves each parsed face's own projection syntax.
         if self.projection == "AUTO":
-            proj = source_projection if source_projection in ("standard", "valve220") else "auto"
+            proj = "auto"
         else:
             proj = self.projection.lower()
         # Normalise to map_writer literal.
         if proj not in ("auto", "standard", "valve220"):
             proj = "auto"
+
+        for warning in map_writer.projection_conversion_warnings(mf, proj):
+            self.report({"WARNING"}, warning)
 
         try:
             map_writer.serialize_path(converted,
@@ -270,11 +309,6 @@ class EXPORT_OT_quake_map(bpy.types.Operator, ExportHelper):
         except (OSError, ValueError) as exc:
             self.report({"ERROR"}, f"Failed to write MAP: {exc}")
             return {"CANCELLED"}
-
-        for warning in report.warnings:
-            self.report({"WARNING"}, warning)
-        for err in report.errors:
-            self.report({"ERROR"}, err)
 
         summary_parts = [f"target={target}"]
         if report.brushdef3_converted:

@@ -19,9 +19,10 @@ the same Bezier interpolation applies to UVs.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Sequence
+from typing import List
 
-from .common import Vec3
+from ..utils.constants import MAX_PATCH_DIMENSION, MAX_PATCH_LEVEL
+from .common import Vec3, parse_finite_float
 
 
 @dataclass(frozen=True)
@@ -64,7 +65,8 @@ def _bez_uv(t: float, a, b, c) -> tuple[float, float]:
 
 def _evaluate_subpatch(p: Patch, ox: int, oy: int, level: int,
                        verts: list[Vec3], uvs: list[tuple[float, float]],
-                       quads: list[tuple[int, int, int, int]]) -> None:
+                       quads: list[tuple[int, int, int, int]],
+                       sample_indices: dict[tuple[int, int], int]) -> None:
     n = level + 1  # samples per side
     grid_idx = [[0] * n for _ in range(n)]
     # Collect 3×3 control net for this subpatch (positions + UVs).
@@ -80,9 +82,14 @@ def _evaluate_subpatch(p: Patch, ox: int, oy: int, level: int,
             s = i / level
             point = _bez_vec(s, row_pos[0], row_pos[1], row_pos[2])
             tex = _bez_uv(s, row_uv[0], row_uv[1], row_uv[2])
-            grid_idx[j][i] = len(verts)
-            verts.append(point)
-            uvs.append(tex)
+            sample = ((ox // 2) * level + i, (oy // 2) * level + j)
+            vertex_index = sample_indices.get(sample)
+            if vertex_index is None:
+                vertex_index = len(verts)
+                sample_indices[sample] = vertex_index
+                verts.append(point)
+                uvs.append(tex)
+            grid_idx[j][i] = vertex_index
 
     for j in range(level):
         for i in range(level):
@@ -98,17 +105,38 @@ def tessellate(patch: Patch, level: int = 5) -> TessellatedPatch:
         raise ValueError("patch grid must be at least 3×3")
     if patch.width % 2 == 0 or patch.height % 2 == 0:
         raise ValueError("patch grid dimensions must be odd")
+    if patch.width > MAX_PATCH_DIMENSION or patch.height > MAX_PATCH_DIMENSION:
+        raise ValueError(
+            f"patch grid dimensions must not exceed {MAX_PATCH_DIMENSION}"
+        )
+    if len(patch.controls) != patch.width * patch.height:
+        raise ValueError(
+            "patch control count does not match width × height "
+            f"({len(patch.controls)} != {patch.width * patch.height})"
+        )
     if level < 1:
         raise ValueError("level must be >= 1")
+    if level > MAX_PATCH_LEVEL:
+        raise ValueError(f"level must not exceed {MAX_PATCH_LEVEL}")
 
     verts: list[Vec3] = []
     uvs: list[tuple[float, float]] = []
     quads: list[tuple[int, int, int, int]] = []
+    sample_indices: dict[tuple[int, int], int] = {}
     sub_w = (patch.width - 1) // 2
     sub_h = (patch.height - 1) // 2
     for sj in range(sub_h):
         for si in range(sub_w):
-            _evaluate_subpatch(patch, si * 2, sj * 2, level, verts, uvs, quads)
+            _evaluate_subpatch(
+                patch,
+                si * 2,
+                sj * 2,
+                level,
+                verts,
+                uvs,
+                quads,
+                sample_indices,
+            )
     return TessellatedPatch(vertices=verts, uvs=uvs, quads=quads)
 
 
@@ -144,8 +172,18 @@ def parse_patch_def2_block(payload: str) -> tuple[str, Patch]:
             raise ValueError("expected '(' after patch texture name")
         width = int(next(it))
         height = int(next(it))
+        if width < 3 or height < 3:
+            raise ValueError("patch grid must be at least 3×3")
+        if width % 2 == 0 or height % 2 == 0:
+            raise ValueError("patch grid dimensions must be odd")
+        if width > MAX_PATCH_DIMENSION or height > MAX_PATCH_DIMENSION:
+            raise ValueError(
+                f"patch grid dimensions must not exceed {MAX_PATCH_DIMENSION}"
+            )
         # Skip three trailing zeros.
-        next(it); next(it); next(it)
+        next(it)
+        next(it)
+        next(it)
         if next(it) != ")":
             raise ValueError("expected ')' closing patch header")
         if next(it) != "(":
@@ -160,8 +198,11 @@ def parse_patch_def2_block(payload: str) -> tuple[str, Patch]:
             for i in range(width):
                 if next(it) != "(":
                     raise ValueError(f"expected '(' opening control ({i},{j})")
-                x = float(next(it)); y = float(next(it)); z = float(next(it))
-                u = float(next(it)); v = float(next(it))
+                x = parse_finite_float(next(it), context="patch coordinate")
+                y = parse_finite_float(next(it), context="patch coordinate")
+                z = parse_finite_float(next(it), context="patch coordinate")
+                u = parse_finite_float(next(it), context="patch UV")
+                v = parse_finite_float(next(it), context="patch UV")
                 if next(it) != ")":
                     raise ValueError("expected ')' closing control")
                 controls[j * width + i] = Control(Vec3(x, y, z), (u, v))

@@ -79,9 +79,16 @@ def _apply_texture_map(tex: TexInfo, mapping: Optional[Dict[str, str]]) -> TexIn
 
 
 def _strip_q2_fields(tex: TexInfo) -> TexInfo:
-    if tex.contents == 0 and tex.surface_flags == 0 and tex.value == 0:
+    if (tex.contents == 0 and tex.surface_flags == 0 and tex.value == 0
+            and not tex.has_q2_trailing_fields):
         return tex
-    return replace(tex, contents=0, surface_flags=0, value=0)
+    return replace(
+        tex,
+        contents=0,
+        surface_flags=0,
+        value=0,
+        has_q2_trailing_fields=False,
+    )
 
 
 # ----------------------------------------------------- brushDef3 → standard
@@ -138,10 +145,11 @@ def _build_extruded_brush(top_quad: List[Vec3], texture: str,
     # supply three points such that ``Plane.from_points`` (which uses
     # (c-a) x (b-a)) yields the outward normal.
     faces = [
-        # Top: outward normal = +n. Use (a, b, c).
-        face(a, b, c, texture),
-        # Bottom: outward normal = -n. Reverse winding.
-        face(a2, c2, b2, skip),
+        # Plane.from_points uses (c-a) x (b-a), so the top needs the
+        # opposite order from the source quad to point along +n.
+        face(a, c, b, texture),
+        # Bottom points along -n.
+        face(a2, b2, c2, skip),
         # Side a-b: outward normal perpendicular to n, pointing outward from quad center.
         face(a, b, b2, skip),
         face(b, c, c2, skip),
@@ -220,7 +228,22 @@ def convert(mf: MapFile, *, source: Game, target: Game,
                 continue
 
             if kind == "patchDef3":
-                report.warnings.append("patchDef3 not implemented; brush dropped")
+                if target == "q3":
+                    if options.texture_map is not None:
+                        report.warnings.append(
+                            "patchDef3 texture remapping is not implemented; "
+                            "brush preserved unchanged"
+                        )
+                    new_brushes.append(MapBrush(
+                        faces=list(brush.faces),
+                        raw_kind=brush.raw_kind,
+                        raw_payload=brush.raw_payload,
+                    ))
+                    continue
+                report.warnings.append(
+                    f"patchDef3 cannot be converted to {target}; brush dropped"
+                )
+                report.patches_dropped += 1
                 continue
 
             # 3. standard / brushDef3-already-handled brushes
@@ -238,6 +261,33 @@ def _remap_brush_textures(brush: MapBrush,
                           target: Game,
                           report: Optional[ConvertReport] = None) -> MapBrush:
     """Apply texture remap + trailing-field strip per face for the target game."""
+    if (brush.raw_kind in ("brushDef3", "brushDef")
+            and not brush.faces
+            and texture_map is not None):
+        try:
+            parsed = bd3_mod.parse_brushdef3_block(brush.raw_payload)
+        except ValueError as exc:
+            if report is not None:
+                report.warnings.append(
+                    f"failed to remap {brush.raw_kind} textures; "
+                    f"keeping original brush: {exc}"
+                )
+            return brush
+        remapped_faces = [
+            replace(face, tex=_apply_texture_map(face.tex, texture_map))
+            for face in parsed.faces
+        ]
+        if all(
+            remapped.tex.name == original.tex.name
+            for remapped, original in zip(remapped_faces, parsed.faces)
+        ):
+            return brush
+        return MapBrush(
+            faces=remapped_faces,
+            raw_kind=brush.raw_kind,
+            raw_payload=brush.raw_payload,
+        )
+
     if brush.raw_kind == "patchDef2" and texture_map is not None:
         # Patch texture is embedded in raw_payload — rewrite it by reparse.
         try:
@@ -251,8 +301,8 @@ def _remap_brush_textures(brush: MapBrush,
         new_name = _remap_texture(name, texture_map)
         if new_name != name:
             new_payload = patch_mod.serialize_patch_def2(new_name, patch)
-            # Strip the wrapping ``patchDef2 { ... }`` so it round-trips through
-            # the MAP parser, which captures only the inner body.
+            # Store the legacy brace-less body; the writer accepts both this
+            # representation and the parser's brace-inclusive raw payload.
             inner = _strip_block(new_payload)
             return MapBrush(faces=[], raw_kind="patchDef2", raw_payload=inner)
         return brush
@@ -269,7 +319,7 @@ def _remap_brush_textures(brush: MapBrush,
 
 
 def _strip_block(block: str) -> str:
-    """Strip a leading ``<keyword>\\n{`` and trailing ``}`` from a brush block."""
+    """Return the legacy brace-less body from a serialized raw brush block."""
     lines = block.splitlines()
     if lines and lines[0].strip() in ("patchDef2", "patchDef3", "brushDef3", "brushDef"):
         lines = lines[1:]

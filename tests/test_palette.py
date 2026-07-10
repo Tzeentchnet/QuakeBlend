@@ -50,6 +50,19 @@ def test_bundled_q2_palette_has_correct_size() -> None:
     assert pal.fullbright_indices == frozenset(Q2_FULLBRIGHT_RANGE)
 
 
+def test_data_package_uses_installed_extension_namespace(monkeypatch) -> None:
+    monkeypatch.setattr(
+        palette,
+        "__package__",
+        "bl_ext.user_default.quakeblend.formats",
+    )
+
+    assert (
+        palette._data_package_name()
+        == "bl_ext.user_default.quakeblend.data"
+    )
+
+
 def test_unknown_game_raises() -> None:
     with pytest.raises(ValueError):
         palette.load_bundled("doom")

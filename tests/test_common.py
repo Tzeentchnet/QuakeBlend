@@ -7,7 +7,9 @@ import struct
 
 import pytest
 
-from quakeblend.formats.common import BinaryReader, Plane, Vec3, chunks, read_exact
+from quakeblend.formats.common import (
+    BinaryReader, Plane, Vec3, chunks, parse_finite_float, read_exact,
+)
 
 
 def test_vec3_arithmetic_and_products() -> None:
@@ -110,3 +112,13 @@ def test_chunks_splits_bytes_and_preserves_tail() -> None:
 
 def test_chunks_empty_sequence_is_empty() -> None:
     assert list(chunks(b"", 4)) == []
+
+
+def test_parse_finite_float_accepts_finite_values() -> None:
+    assert parse_finite_float("-1.25e2", context="coordinate") == -125.0
+
+
+@pytest.mark.parametrize("token", ["nan", "inf", "-inf"])
+def test_parse_finite_float_rejects_non_finite_values(token: str) -> None:
+    with pytest.raises(ValueError, match="coordinate must be finite"):
+        parse_finite_float(token, context="coordinate")

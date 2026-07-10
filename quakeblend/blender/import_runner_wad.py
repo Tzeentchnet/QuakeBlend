@@ -9,6 +9,7 @@ import bpy
 from ..formats import palette as palette_mod
 from ..formats import wad as wad_mod
 from ..formats import wal as wal_mod
+from ..utils import paths as qb_paths
 from . import builder_materials
 
 
@@ -24,22 +25,44 @@ def run(operator: bpy.types.Operator, context: bpy.types.Context, filepath: str)
         count = 0
         for mt in archive.textures:
             pal = palette_mod.from_bytes(mt.palette) if mt.palette else default_pal
+            source_key = qb_paths.file_asset_key(
+                path,
+                namespace="wad",
+                member=mt.name,
+            )
             if create_materials:
-                builder_materials.material_from_miptex(mt, pal)
+                builder_materials.material_from_miptex(
+                    mt,
+                    pal,
+                    source_key=source_key,
+                )
             else:
                 rgba = palette_mod.decode_indexed(mt.pixels, pal, opaque_index=None)
-                builder_materials.create_image(mt.name, mt.width, mt.height, rgba)
+                builder_materials.create_image(
+                    mt.name,
+                    mt.width,
+                    mt.height,
+                    rgba,
+                    asset_key=f"{source_key}|image",
+                )
             count += 1
         return count
 
     if suffix == ".wal":
         w = wal_mod.read_wal_path(path)
         pal = palette_mod.load_bundled("q2")
+        source_key = qb_paths.file_asset_key(path, namespace="wal", member=w.name)
         if create_materials:
-            builder_materials.material_from_wal(w, pal)
+            builder_materials.material_from_wal(w, pal, source_key=source_key)
         else:
             rgba = palette_mod.decode_indexed(w.pixels, pal, opaque_index=None)
-            builder_materials.create_image(w.name, w.width, w.height, rgba)
+            builder_materials.create_image(
+                w.name,
+                w.width,
+                w.height,
+                rgba,
+                asset_key=f"{source_key}|image",
+            )
         return 1
 
     raise ValueError(f"unsupported texture archive extension: {suffix!r}")

@@ -17,6 +17,7 @@ from . import map_q1 as _q1
 
 parse = _q1.parse
 parse_path = _q1.parse_path
+detect_game = _q1.detect_game
 MapFile = _q1.MapFile
 MapEntity = _q1.MapEntity
 MapBrush = _q1.MapBrush

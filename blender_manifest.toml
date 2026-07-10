@@ -1,7 +1,7 @@
 schema_version = "1.0.0"
 
 id = "quakeblend"
-version = "0.1.0"
+version = "1.1.0"
 name = "QuakeBlend"
 tagline = "Import Quake 1/2/3 maps, BSPs, and texture archives"
 maintainer = "QuakeBlend Contributors"
@@ -20,3 +20,6 @@ license = [
 copyright = [
   "2026 QuakeBlend Contributors",
 ]
+
+[permissions]
+files = "Import and export Quake maps, BSPs, archives, and textures"

@@ -21,6 +21,7 @@ Q2_MAP = """
 def test_q2_trailing_fields_in_canonical_order() -> None:
     """Quake 2 face syntax stores ``contents flags value`` after the standard fields."""
     mf = map_q2.parse(Q2_MAP)
+    assert map_q2.detect_game(mf) == "q2"
     brush = mf.entities[0].brushes[0]
     f0, f1, f2, f3 = brush.faces
 
@@ -33,6 +34,7 @@ def test_q2_trailing_fields_in_canonical_order() -> None:
     assert f1.tex.contents == 0
     assert f1.tex.surface_flags == 0
     assert f1.tex.value == 0
+    assert all(face.tex.has_q2_trailing_fields for face in brush.faces)
 
     # ``8 4 0`` -> contents=8 (e.g. CONTENTS_LAVA bit), flags=4, value=0.
     assert f2.tex.contents == 8
@@ -64,3 +66,4 @@ def test_q2_trailing_fields_optional() -> None:
         assert face.tex.contents == 0
         assert face.tex.surface_flags == 0
         assert face.tex.value == 0
+        assert not face.tex.has_q2_trailing_fields

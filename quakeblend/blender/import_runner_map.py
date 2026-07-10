@@ -26,7 +26,16 @@ def _load_wad_materials(wad_paths: list[Path]) -> dict[str, bpy.types.Material]:
         archive = wad_mod.read_wad_path(path)
         for mt in archive.textures:
             tex_pal = palette_mod.from_bytes(mt.palette) if mt.palette else pal
-            mat = builder_materials.material_from_miptex(mt, tex_pal)
+            source_key = qb_paths.file_asset_key(
+                path,
+                namespace="wad",
+                member=mt.name,
+            )
+            mat = builder_materials.material_from_miptex(
+                mt,
+                tex_pal,
+                source_key=source_key,
+            )
             out.setdefault(mt.name, mat)
     return out
 
@@ -43,49 +52,6 @@ def _resolve_texture_root(operator: bpy.types.Operator,
     return Path(raw) if raw else None
 
 
-_Q3_TEXTURE_EXTS = (".tga", ".jpg", ".jpeg", ".png")
-
-
-def _resolve_external_texture(texture_root: Path, name: str) -> tuple[Path, str] | None:
-    """Find an external texture under ``texture_root``.
-
-    Returns ``(path, kind)`` where ``kind`` is ``"wal"`` or ``"image"``, or ``None``.
-    Searches both directly under the root and under a ``textures/`` subfolder, and
-    falls back to a case-insensitive recursive walk.
-    """
-    # Direct WAL candidates (Quake 2). ``name`` comes from the untrusted map
-    # file, so join it via ``safe_join_under_root`` to reject any attempt to
-    # escape ``texture_root`` via absolute paths or ``..`` segments.
-    wal_candidates = [
-        qb_paths.safe_join_under_root(texture_root, f"{name}.wal"),
-        qb_paths.safe_join_under_root(texture_root, "textures", f"{name}.wal"),
-    ]
-    for cand in wal_candidates:
-        if cand is not None and cand.exists():
-            return cand, "wal"
-    # Direct image candidates (Quake 3).
-    base = qb_paths.safe_join_under_root(texture_root, name)
-    if base is not None:
-        for ext in _Q3_TEXTURE_EXTS:
-            cand = base.with_suffix(ext)
-            if cand.exists():
-                return cand, "image"
-        if base.exists() and base.suffix.lower() in _Q3_TEXTURE_EXTS:
-            return base, "image"
-    # Case-insensitive walk fallback for WAL (already contained under root
-    # because rglob only yields real paths beneath texture_root).
-    needle = (name + ".wal").lower().replace("\\", "/")
-    if texture_root.exists():
-        for path in texture_root.rglob("*.wal"):
-            try:
-                rel = str(path.relative_to(texture_root)).lower().replace("\\", "/")
-            except ValueError:
-                continue
-            if rel.endswith(needle) or rel == needle:
-                return path, "wal"
-    return None
-
-
 def _material_for_external(operator: bpy.types.Operator,
                            name: str,
                            info: tuple[Path, str],
@@ -93,35 +59,60 @@ def _material_for_external(operator: bpy.types.Operator,
     path, kind = info
     if kind == "wal":
         try:
+            source_key = qb_paths.file_asset_key(path, namespace="wal", member=name)
             wal = wal_mod.read_wal_path(path)
-        except (OSError, ValueError):
-            return None
-        return builder_materials.material_from_wal(wal, q2_palette)
-    # image (Q3-style)
-    mat = bpy.data.materials.get(name)
-    if mat is not None:
-        return mat
-    mat = bpy.data.materials.new(name)
-    mat.use_nodes = True
-    nt = mat.node_tree
-    nt.nodes.clear()
-    output = nt.nodes.new("ShaderNodeOutputMaterial")
-    bsdf = nt.nodes.new("ShaderNodeBsdfPrincipled")
-    bsdf.inputs["Roughness"].default_value = 1.0
-    nt.links.new(bsdf.outputs[0], output.inputs[0])
+            return builder_materials.material_from_wal(
+                wal,
+                q2_palette,
+                source_key=source_key,
+            )
+        except (OSError, ValueError) as exc:
+            qb_log.report(
+                operator,
+                {"WARNING"},
+                f"Failed to load WAL texture '{name}' from '{path}': {exc}",
+            )
+            return builder_materials.get_or_create_placeholder_material(
+                name,
+                asset_key=(
+                    f"placeholder|wal-load-failed|{path.as_posix().casefold()}|"
+                    f"{name.casefold()}"
+                ),
+            )
     try:
-        img = bpy.data.images.load(str(path), check_existing=True)
-        tex_node = nt.nodes.new("ShaderNodeTexImage")
-        tex_node.image = img
-        tex_node.interpolation = "Closest"
-        nt.links.new(tex_node.outputs["Color"], bsdf.inputs["Base Color"])
-    except RuntimeError as exc:
+        source_key = qb_paths.file_asset_key(path, namespace="q3-image", member=name)
+        return builder_materials.material_from_external_image(
+            name,
+            path,
+            source_key=source_key,
+        )
+    except (OSError, ValueError, RuntimeError) as exc:
         qb_log.report(
             operator,
             {"WARNING"},
             f"Failed to load texture image '{name}' from '{path}': {exc}",
         )
-    return mat
+        return builder_materials.get_or_create_placeholder_material(
+            name,
+            asset_key=(
+                f"placeholder|q3-load-failed|{path.as_posix().casefold()}|"
+                f"{name.casefold()}"
+            ),
+        )
+
+
+def _tag_entity_anchor(obj: bpy.types.Object,
+                       properties: dict[str, str],
+                       entity_index: int,
+                       *, has_valid_origin: bool) -> None:
+    obj["qb_entity_role"] = "ENTITY"
+    obj["qb_entity_index"] = entity_index
+    obj["qb_entity_has_origin"] = has_valid_origin
+    for key, value in properties.items():
+        try:
+            obj[f"qb_prop_{key}"] = value
+        except (TypeError, KeyError):
+            continue
 
 
 def run(operator: bpy.types.Operator, context: bpy.types.Context, filepath: str) -> None:
@@ -133,12 +124,26 @@ def run(operator: bpy.types.Operator, context: bpy.types.Context, filepath: str)
         except (KeyError, AttributeError):
             wad_paths_str = ""
     wad_paths = [Path(p) for p in wad_paths_str.split(";") if p.strip()]
-    materials = _load_wad_materials(wad_paths)
     texture_root = _resolve_texture_root(operator, context)
-    q2_palette = palette_mod.load_bundled("q2") if texture_root is not None else None
     map_path = Path(filepath)
 
     mf = map_q1.parse_path(map_path)
+    requested_game = str(getattr(operator, "source_game", "AUTO")).lower()
+    source_game = (
+        map_q1.detect_game(mf)
+        if requested_game == "auto"
+        else requested_game
+    )
+    if source_game not in ("q1", "q2", "q3"):
+        raise ValueError(f"unsupported MAP source game {source_game!r}")
+    materials = _load_wad_materials(wad_paths)
+    texture_index = (
+        qb_paths.TextureRootIndex(texture_root)
+        if texture_root is not None
+        else None
+    )
+    external_texture_kind = {"q2": "wal", "q3": "image"}.get(source_game)
+    q2_palette = palette_mod.load_bundled("q2") if texture_root is not None else None
 
     scene = context.scene
     root = bpy.data.collections.new(map_path.stem)
@@ -147,23 +152,16 @@ def run(operator: bpy.types.Operator, context: bpy.types.Context, filepath: str)
     # Cache the source path + detected game so the export operator can later
     # re-parse the original file as its source of truth.
     root["qb_source_map"] = str(map_path.resolve())
-    name_lower = map_path.name.lower()
-    if "q3" in name_lower or "quake3" in name_lower:
-        source_game = "q3"
-    elif "q2" in name_lower or "quake2" in name_lower:
-        source_game = "q2"
-    else:
-        source_game = "q1"
-    # Also derive from brush content (presence of brushDef3/patchDef2 ⇒ q3).
-    if any(b.raw_kind in ("brushDef3", "brushDef", "patchDef2", "patchDef3")
-           for ent in mf.entities for b in ent.brushes):
-        source_game = "q3"
     root["qb_source_game"] = source_game
+    root["qb_import_scale"] = scale
+    projections = {
+        "valve220" if face.tex.is_valve220 else "standard"
+        for ent in mf.entities
+        for brush in ent.brushes
+        for face in brush.faces
+    }
     root["qb_source_projection"] = (
-        "valve220" if any(face.tex.is_valve220
-                          for ent in mf.entities for b in ent.brushes
-                          for face in b.faces)
-        else "standard"
+        next(iter(projections)) if len(projections) == 1 else "mixed"
     )
 
     for ent_idx, entity in enumerate(mf.entities):
@@ -173,8 +171,20 @@ def run(operator: bpy.types.Operator, context: bpy.types.Context, filepath: str)
 
         for brush_idx, brush in enumerate(entity.brushes):
             if brush.raw_kind == "patchDef2":
-                _build_patch(operator, brush, ent_coll,
-                             f"{classname}_patch_{brush_idx}", scale=scale)
+                patch_obj = _build_patch(
+                    operator,
+                    brush,
+                    ent_coll,
+                    f"{classname}_patch_{brush_idx}",
+                    materials,
+                    texture_index,
+                    external_texture_kind,
+                    q2_palette,
+                    scale=scale,
+                )
+                if patch_obj is not None:
+                    patch_obj["qb_owner_entity_index"] = ent_idx
+                    patch_obj["qb_brush_index"] = brush_idx
                 continue
             if brush.raw_kind in ("brushDef3", "brushDef"):
                 try:
@@ -197,8 +207,11 @@ def run(operator: bpy.types.Operator, context: bpy.types.Context, filepath: str)
             for csg, src in zip(csg_faces, brush.faces):
                 tex_name = src.tex.name
                 # On-demand external texture resolution (Q2 WAL / Q3 image).
-                if tex_name not in materials and texture_root is not None:
-                    info = _resolve_external_texture(texture_root, tex_name)
+                if tex_name not in materials and texture_index is not None:
+                    info = texture_index.resolve(
+                        tex_name,
+                        kind=external_texture_kind,
+                    )
                     if info is not None:
                         mat = _material_for_external(operator, tex_name, info, q2_palette)
                         if mat is not None:
@@ -225,7 +238,7 @@ def run(operator: bpy.types.Operator, context: bpy.types.Context, filepath: str)
                 ent_coll, materials, scale=scale,
             )
             if obj is not None:
-                obj["qb_entity_index"] = ent_idx
+                obj["qb_owner_entity_index"] = ent_idx
                 obj["qb_brush_index"] = brush_idx
 
         if getattr(operator, "import_entities", True):
@@ -238,26 +251,52 @@ def run(operator: bpy.types.Operator, context: bpy.types.Context, filepath: str)
                 scale=scale,
                 operator=operator,
             )
-            if built is None and not entity.brushes:
-                # Entities with no origin and no brushes — drop a marker empty.
+            has_valid_origin = built is not None and bool(entity.properties.get("origin"))
+            if built is None:
                 empty = bpy.data.objects.new(classname, None)
                 empty.empty_display_type = "SPHERE"
                 ent_coll.objects.link(empty)
+                built = empty
+            _tag_entity_anchor(
+                built,
+                entity.properties,
+                ent_idx,
+                has_valid_origin=has_valid_origin,
+            )
 
 
-def _build_patch(operator, brush, collection, name: str, scale: float) -> None:
+def _build_patch(operator, brush, collection, name: str,
+                 materials: dict[str, bpy.types.Material],
+                 texture_index: qb_paths.TextureRootIndex | None,
+                 external_texture_kind: str | None,
+                 q2_palette: palette_mod.Palette | None,
+                 *, scale: float) -> bpy.types.Object | None:
     try:
         tex_name, p = patch_mod.parse_patch_def2_block(brush.raw_payload)
         tess = patch_mod.tessellate(p, level=int(getattr(operator, "patch_level", 5)))
     except Exception as exc:
         qb_log.report(operator, {"WARNING"}, f"Skipping patch {name}: {exc}")
-        return
+        return None
+
+    material = materials.get(tex_name)
+    if material is None and texture_index is not None:
+        info = texture_index.resolve(tex_name, kind=external_texture_kind)
+        if info is not None and q2_palette is not None:
+            material = _material_for_external(operator, tex_name, info, q2_palette)
+            if material is not None:
+                materials[tex_name] = material
+    if material is None:
+        material = builder_materials.get_or_create_placeholder_material(
+            tex_name,
+            asset_key=f"placeholder|map|{tex_name.casefold()}",
+        )
 
     mesh = bpy.data.meshes.new(name)
     verts = [(v.x * scale, v.y * scale, v.z * scale) for v in tess.vertices]
     faces = [list(q) for q in tess.quads]
     mesh.from_pydata(verts, [], faces)
     mesh.update()
+    mesh.materials.append(material)
     if mesh.uv_layers:
         uv_layer = mesh.uv_layers.active.data
     else:
@@ -276,3 +315,4 @@ def _build_patch(operator, brush, collection, name: str, scale: float) -> None:
     obj["qb_patch_control_grid"] = [
         [c.pos.x, c.pos.y, c.pos.z, c.uv[0], c.uv[1]] for c in p.controls
     ]
+    return obj

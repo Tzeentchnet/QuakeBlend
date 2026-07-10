@@ -28,6 +28,7 @@ CUBE_MAP = """
 
 def test_parse_basic_map() -> None:
     mf = map_q1.parse(CUBE_MAP)
+    assert map_q1.detect_game(mf) == "q1"
     assert len(mf.entities) == 2
     ws = mf.entities[0]
     assert ws.properties["classname"] == "worldspawn"
@@ -94,3 +95,37 @@ def test_unterminated_quoted_string_raises() -> None:
     bad_map = '{\n"classname" "worldspawn\n}\n'
     with pytest.raises(ValueError, match="unterminated quoted string"):
         map_q1.parse(bad_map)
+
+
+def test_q3_raw_block_ignores_braces_inside_comments() -> None:
+    source = """
+    {
+    "classname" "worldspawn"
+    {
+    brushDef3
+    {
+    // A stray } in a comment must not terminate the raw block.
+    ( 0 0 1 0 ) ( ( 0.03125 0 0 ) ( 0 0.03125 0 ) ) common/caulk 0 0 0
+    }
+    }
+    }
+    """
+    mf = map_q1.parse(source)
+    brush = mf.entities[0].brushes[0]
+    assert brush.raw_kind == "brushDef3"
+    assert "common/caulk" in brush.raw_payload
+
+
+def test_q3_unterminated_raw_block_raises() -> None:
+    source = '{\n"classname" "worldspawn"\n{\npatchDef2\n{\ncommon/clip\n'
+    with pytest.raises(ValueError, match="unterminated patchDef2 block"):
+        map_q1.parse(source)
+
+
+def test_parse_rejects_excessive_brush_face_count(monkeypatch) -> None:
+    monkeypatch.setattr(map_q1, "MAX_BRUSH_FACES", 2)
+    face = "( 0 0 0 ) ( 1 0 0 ) ( 0 1 0 ) stone 0 0 0 1 1"
+    source = '{\n"classname" "worldspawn"\n{\n' + "\n".join([face] * 3) + "\n}\n}"
+
+    with pytest.raises(ValueError, match="maximum face count 2"):
+        map_q1.parse(source)

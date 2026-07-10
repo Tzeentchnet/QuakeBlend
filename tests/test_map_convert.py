@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from quakeblend.formats import map_convert, map_q1, map_q3, map_writer
+from quakeblend.formats import csg, map_convert, map_q1, map_q3, map_writer
+from quakeblend.formats.common import Vec3
 
 
 CUBE_Q2 = """
@@ -65,6 +66,20 @@ brushDef3
 """
 
 
+Q3_PATCHDEF3 = """
+{
+"classname" "worldspawn"
+{
+patchDef3
+{
+textures/base_wall/example
+( 3 3 0 0 0 )
+}
+}
+}
+"""
+
+
 def test_q2_to_q1_strips_trailing_fields() -> None:
     mf = map_q1.parse(CUBE_Q2)
     converted, report = map_convert.convert(mf, source="q2", target="q1")
@@ -72,6 +87,7 @@ def test_q2_to_q1_strips_trailing_fields() -> None:
         assert face.tex.contents == 0
         assert face.tex.surface_flags == 0
         assert face.tex.value == 0
+        assert not face.tex.has_q2_trailing_fields
     assert report.errors == []
 
 
@@ -114,6 +130,25 @@ def test_q3_to_q1_tessellates_patches_and_normalizes_brushdef3() -> None:
     assert report.patches_tessellated == 1
 
 
+def test_extruded_patch_quad_builds_closed_brush() -> None:
+    options = map_convert.ConvertOptions(extrusion_thickness=1.0)
+    brush = map_convert._build_extruded_brush(
+        [
+            Vec3(0.0, 0.0, 0.0),
+            Vec3(1.0, 0.0, 0.0),
+            Vec3(1.0, 1.0, 0.0),
+            Vec3(0.0, 1.0, 0.0),
+        ],
+        "common/caulk",
+        options,
+    )
+
+    assert brush is not None
+    rings = csg.brush_faces_from_planes([face.plane for face in brush.faces])
+    assert len(rings) == 6
+    assert all(len(ring) == 4 for ring in rings)
+
+
 def test_q3_to_q1_drop_patches() -> None:
     mf = map_q1.parse(Q3_MAP)
     options = map_convert.ConvertOptions(patch_handling="drop")
@@ -124,6 +159,19 @@ def test_q3_to_q1_drop_patches() -> None:
     assert len(brushes) == 1
     assert brushes[0].raw_kind == "standard"
     assert report.patches_dropped == 1
+
+
+def test_q3_to_q3_preserves_patchdef3_payload() -> None:
+    mf = map_q1.parse(Q3_PATCHDEF3)
+
+    converted, report = map_convert.convert(mf, source="q3", target="q3")
+    reparsed = map_q1.parse(map_writer.serialize(converted, dialect="q3"))
+
+    assert report.errors == []
+    assert len(reparsed.entities[0].brushes) == 1
+    brush = reparsed.entities[0].brushes[0]
+    assert brush.raw_kind == "patchDef3"
+    assert "textures/base_wall/example" in brush.raw_payload
 
 
 def test_keep_patches_rejected_for_non_q3() -> None:
@@ -157,6 +205,35 @@ def test_texture_remap_fallback_wildcard() -> None:
                                        options=options)
     for face in converted.entities[0].brushes[0].faces:
         assert face.tex.name == "textures/missing"
+
+
+def test_texture_remap_applies_to_raw_brushdef3() -> None:
+    mf = map_q1.parse(Q3_MAP)
+    options = map_convert.ConvertOptions(
+        texture_map={"common/caulk": "textures/base_wall/c_wall1a"},
+        patch_handling="keep",
+    )
+
+    converted, report = map_convert.convert(
+        mf,
+        source="q3",
+        target="q3",
+        options=options,
+    )
+    reparsed = map_q1.parse(map_writer.serialize(converted, dialect="q3"))
+    primitive = next(
+        brush
+        for brush in reparsed.entities[0].brushes
+        if brush.raw_kind == "brushDef3"
+    )
+    parsed_primitive = map_convert.bd3_mod.parse_brushdef3_block(
+        primitive.raw_payload
+    )
+
+    assert report.errors == []
+    assert {
+        face.tex.name for face in parsed_primitive.faces
+    } == {"textures/base_wall/c_wall1a"}
 
 
 def test_patch_texture_remap_parse_failure_surfaces_warning() -> None:

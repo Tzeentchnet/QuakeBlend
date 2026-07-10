@@ -7,10 +7,11 @@ The formats layer uses :func:`get_logger` (stdout only). The blender layer uses
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Iterable
+from typing import Iterable, Protocol
 
-if TYPE_CHECKING:  # pragma: no cover
-    import bpy
+
+class ReportOperator(Protocol):
+    def report(self, level: set[str], message: str) -> None: ...
 
 _LOGGER_NAME = "quakeblend"
 
@@ -31,7 +32,7 @@ def configure_default(level: int = logging.INFO) -> None:
     logger.setLevel(level)
 
 
-def report(operator: "bpy.types.Operator", level: Iterable[str], message: str) -> None:
+def report(operator: ReportOperator, level: Iterable[str], message: str) -> None:
     """Forward a message to a Blender operator's report channel and the logger."""
     operator.report(set(level), message)
     log_level = logging.WARNING if "WARNING" in level else (

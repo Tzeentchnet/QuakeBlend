@@ -1,19 +1,22 @@
 """Serialize an in-memory :class:`~quakeblend.formats.map_q1.MapFile` back to
 ``.map`` text targeting Q1, Q2, or Q3.
 
-Companion to :mod:`quakeblend.formats.map_q1` (parser). For brush-primitive
-faces (``brushDef3``) and Bezier patches (``patchDef2``) we delegate to
-:mod:`~quakeblend.formats.brushdef3` and :mod:`~quakeblend.formats.patch`.
+Companion to :mod:`quakeblend.formats.map_q1` (parser). Parsed brush-primitive
+faces (``brushDef3``) are serialized through :mod:`~quakeblend.formats.brushdef3`;
+captured Bezier patch payloads are preserved verbatim.
 """
 
 from __future__ import annotations
 
+import math
+import os
+import tempfile
+from dataclasses import replace
 from pathlib import Path
 from typing import Literal
 
 from . import brushdef3 as bd3_mod
-from . import patch as patch_mod
-from .map_q1 import MapBrush, MapEntity, MapFace, MapFile, TexInfo
+from .map_q1 import MapBrush, MapEntity, MapFace, MapFile
 
 
 Dialect = Literal["q1", "q2", "q3"]
@@ -36,13 +39,145 @@ def _fmt_vec(v) -> str:
 
 
 def _quote(s: str) -> str:
-    return '"' + s.replace('"', '\\"') + '"'
+    escaped = (
+        s.replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("\n", "\\n")
+        .replace("\t", "\\t")
+    )
+    return '"' + escaped + '"'
+
+
+def _as_valve220(face: MapFace) -> MapFace:
+    if face.tex.is_valve220:
+        return face
+    s_base, t_base = bd3_mod.base_axes_for_normal(face.plane.normal)
+    radians = math.radians(face.tex.rotation)
+    cos_r = math.cos(radians)
+    sin_r = math.sin(radians)
+    s_axis = s_base * cos_r - t_base * sin_r
+    t_axis = s_base * sin_r + t_base * cos_r
+    tex = replace(
+        face.tex,
+        s_axis=s_axis,
+        s_offset=face.tex.xoffset,
+        t_axis=t_axis,
+        t_offset=face.tex.yoffset,
+        rotation=0.0,
+    )
+    return replace(face, tex=tex)
+
+
+def _valve_axis_components(face: MapFace, axis) -> tuple[float, float, float]:
+    """Decompose an axis into Standard S/T axes plus the face normal."""
+    s_base, t_base = bd3_mod.base_axes_for_normal(face.plane.normal)
+    normal = face.plane.normal
+    determinant = s_base.dot(t_base.cross(normal))
+    if abs(determinant) <= 1e-9:
+        raise ValueError("face basis is degenerate")
+    return (
+        axis.dot(t_base.cross(normal)) / determinant,
+        axis.dot(normal.cross(s_base)) / determinant,
+        axis.dot(s_base.cross(t_base)) / determinant,
+    )
+
+
+def _standard_projection_loss(face: MapFace) -> str | None:
+    if not face.tex.is_valve220:
+        return None
+    assert face.tex.s_axis is not None and face.tex.t_axis is not None
+    try:
+        s_x, s_y, _ = _valve_axis_components(face, face.tex.s_axis)
+        t_x, t_y, _ = _valve_axis_components(face, face.tex.t_axis)
+    except ValueError as exc:
+        return str(exc)
+    s_length = math.hypot(s_x, s_y)
+    t_length = math.hypot(t_x, t_y)
+    if s_length <= 1e-9 or t_length <= 1e-9:
+        return "one or both texture axes are degenerate"
+    if abs(face.tex.xscale) <= 1e-9 or abs(face.tex.yscale) <= 1e-9:
+        return "one or both texture scales are zero"
+    s_unit = (s_x / s_length, s_y / s_length)
+    t_unit = (t_x / t_length, t_y / t_length)
+    expected_t = (-s_unit[1], s_unit[0])
+    if max(abs(t_unit[i] - expected_t[i]) for i in range(2)) > 1e-5:
+        return "the texture axes contain shear or independent rotation"
+    return None
+
+
+def projection_conversion_warnings(
+    mf: MapFile,
+    projection: Projection,
+    *,
+    limit: int = 20,
+) -> list[str]:
+    """Describe Valve220 faces that forced Standard output must approximate."""
+    if projection != "standard":
+        return []
+    messages: list[str] = []
+    omitted = 0
+    for entity_index, entity in enumerate(mf.entities):
+        for brush_index, brush in enumerate(entity.brushes):
+            for face_index, face in enumerate(brush.faces):
+                reason = _standard_projection_loss(face)
+                if reason is None:
+                    continue
+                if len(messages) < limit:
+                    messages.append(
+                        f"Valve220 projection on entity {entity_index} brush "
+                        f"{brush_index} face {face_index} ({face.tex.name!r}) is not "
+                        f"exactly representable as Standard: {reason}; export will "
+                        "approximate it"
+                    )
+                else:
+                    omitted += 1
+    if omitted:
+        messages.append(f"{omitted} additional projection warning(s) omitted")
+    return messages
+
+
+def _as_standard(face: MapFace) -> MapFace:
+    if not face.tex.is_valve220:
+        return face
+    assert face.tex.s_axis is not None and face.tex.t_axis is not None
+    s_cos, s_neg_sin, s_normal = _valve_axis_components(
+        face, face.tex.s_axis
+    )
+    t_sin, t_cos, t_normal = _valve_axis_components(face, face.tex.t_axis)
+    s_length = math.hypot(s_cos, s_neg_sin)
+    t_length = math.hypot(t_sin, t_cos)
+    if s_length > 1e-9:
+        rotation = math.degrees(math.atan2(-s_neg_sin, s_cos))
+    elif t_length > 1e-9:
+        rotation = math.degrees(math.atan2(t_sin, t_cos))
+    else:
+        rotation = face.tex.rotation
+    tex = replace(
+        face.tex,
+        xoffset=(
+            face.tex.s_offset + s_normal * face.plane.dist / face.tex.xscale
+            if abs(face.tex.xscale) > 1e-9
+            else face.tex.s_offset
+        ),
+        yoffset=(
+            face.tex.t_offset + t_normal * face.plane.dist / face.tex.yscale
+            if abs(face.tex.yscale) > 1e-9
+            else face.tex.t_offset
+        ),
+        rotation=rotation,
+        xscale=(face.tex.xscale / s_length if s_length > 1e-9 else face.tex.xscale),
+        yscale=(face.tex.yscale / t_length if t_length > 1e-9 else face.tex.yscale),
+        s_axis=None,
+        t_axis=None,
+    )
+    return replace(face, tex=tex)
 
 
 # --------------------------------------------------------------- face text
 
 
 def _serialize_face_standard(face: MapFace, *, dialect: Dialect) -> str:
+    face = _as_standard(face)
     tex = face.tex
     parts = [
         _fmt_vec(face.p1), _fmt_vec(face.p2), _fmt_vec(face.p3),
@@ -62,10 +197,9 @@ def _serialize_face_standard(face: MapFace, *, dialect: Dialect) -> str:
 
 
 def _serialize_face_valve220(face: MapFace, *, dialect: Dialect) -> str:
+    face = _as_valve220(face)
     tex = face.tex
-    if tex.s_axis is None or tex.t_axis is None:
-        # Fall back to standard if axes are missing.
-        return _serialize_face_standard(face, dialect=dialect)
+    assert tex.s_axis is not None and tex.t_axis is not None
     s = tex.s_axis
     t = tex.t_axis
     parts = [
@@ -101,28 +235,28 @@ def _serialize_brush(brush: MapBrush, *, dialect: Dialect, projection: Projectio
                      indent: str) -> list[str]:
     lines = [indent + "{"]
     if brush.raw_kind == "patchDef2":
-        # Re-parse and re-emit so we round-trip cleanly. ``brush.raw_payload``
-        # is preserved verbatim from the original parser.
-        try:
-            name, patch = patch_mod.parse_patch_def2_block(brush.raw_payload)
-        except (ValueError, StopIteration) as exc:
-            raise ValueError(f"failed to re-parse patchDef2 payload: {exc}")
-        body = patch_mod.serialize_patch_def2(name, patch, indent=indent)
-        for line in body.splitlines():
+        lines.append(indent + "patchDef2")
+        payload = brush.raw_payload.strip()
+        if not payload.startswith("{"):
+            lines.append(indent + "{")
+        for line in payload.splitlines():
             lines.append(indent + line)
+        if not payload.endswith("}"):
+            lines.append(indent + "}")
     elif brush.raw_kind in ("brushDef3", "brushDef"):
-        body = bd3_mod.serialize_brushdef3(brush, indent=indent)
-        for line in body.splitlines():
-            lines.append(indent + line)
+        if brush.faces:
+            body = bd3_mod.serialize_brushdef3(brush, indent=indent)
+            for line in body.splitlines():
+                lines.append(indent + line)
+        else:
+            lines.append(indent + brush.raw_kind)
+            for line in brush.raw_payload.strip().splitlines():
+                lines.append(indent + line)
     elif brush.raw_kind == "patchDef3":
-        # Not implemented — preserve verbatim.
         lines.append(indent + "patchDef3")
-        lines.append(indent + "{")
-        lines.append(brush.raw_payload.rstrip())
-        lines.append(indent + "}")
+        for line in brush.raw_payload.strip().splitlines():
+            lines.append(indent + line)
     else:
-        face_writer = _choose_face_writer(brush.faces[0], projection) if brush.faces \
-            else _serialize_face_standard
         for face in brush.faces:
             # Re-pick per-face for "auto"; respect the requested mode otherwise.
             writer = _choose_face_writer(face, projection)
@@ -177,6 +311,18 @@ def serialize(mf: MapFile, *, dialect: Dialect = "q1",
 
 
 def serialize_path(mf: MapFile, path: str | Path, **kwargs) -> None:
-    """Serialize ``mf`` and write it to ``path`` as UTF-8."""
+    """Serialize ``mf`` and atomically replace ``path`` with UTF-8 text."""
     text = serialize(mf, **kwargs)
-    Path(path).write_text(text, encoding="utf-8", newline="\n")
+    destination = Path(path)
+    descriptor, temp_name = tempfile.mkstemp(
+        dir=destination.parent,
+        prefix=f".{destination.name}.",
+        suffix=".tmp",
+    )
+    os.close(descriptor)
+    temporary = Path(temp_name)
+    try:
+        temporary.write_text(text, encoding="utf-8", newline="\n")
+        os.replace(temporary, destination)
+    finally:
+        temporary.unlink(missing_ok=True)

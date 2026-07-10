@@ -8,7 +8,6 @@ from pathlib import Path
 import bpy
 
 from ..formats import bsp_q1, bsp_q2, bsp_q3, palette as palette_mod, patch as patch_mod, wal as wal_mod
-from ..formats.common import Vec3
 from ..utils.constants import BSP_VERSION_Q1, BSP_VERSION_Q2, BSP_VERSION_Q3, IBSP_MAGIC
 from ..utils import log as qb_log, paths as qb_paths
 from . import builder_entities, builder_geometry, builder_materials
@@ -45,7 +44,8 @@ def _detect_version(filepath: Path) -> tuple[str, int]:
     raise ValueError(f"unrecognised BSP signature (first int = {version})")
 
 
-def _build_q1_materials(bsp: bsp_q1.Bsp) -> dict[int, bpy.types.Material]:
+def _build_q1_materials(bsp: bsp_q1.Bsp,
+                        source_path: Path) -> dict[int, bpy.types.Material]:
     pal = palette_mod.load_bundled("q1")
     out: dict[int, bpy.types.Material] = {}
     for idx, mt in enumerate(bsp.miptextures):
@@ -56,7 +56,16 @@ def _build_q1_materials(bsp: bsp_q1.Bsp) -> dict[int, bpy.types.Material]:
         mip = WadMip(name=mt.name, width=mt.width, height=mt.height,
                      pixels=mt.pixels, mip_pixels=(mt.pixels, b"", b"", b""),
                      palette=None)
-        out[idx] = builder_materials.material_from_miptex(mip, pal)
+        source_key = qb_paths.file_asset_key(
+            source_path,
+            namespace="q1-bsp",
+            member=f"{idx}:{mt.name}",
+        )
+        out[idx] = builder_materials.material_from_miptex(
+            mip,
+            pal,
+            source_key=source_key,
+        )
     return out
 
 
@@ -81,7 +90,8 @@ def _import_q1(operator: bpy.types.Operator, context: bpy.types.Context,
                filepath: Path) -> None:
     scale = float(getattr(operator, "scale", 1.0 / 32.0))
     bsp = bsp_q1.read_path(filepath)
-    materials_by_miptex = _build_q1_materials(bsp)
+    bsp.validate()
+    materials_by_miptex = _build_q1_materials(bsp, filepath)
 
     # Build a flat material list + per-face material index.
     material_list: list[bpy.types.Material] = []
@@ -149,46 +159,58 @@ def run(operator: bpy.types.Operator, context: bpy.types.Context, filepath: str)
 # ============================================================ Quake 2 ======
 
 
-def _resolve_wal(texture_root: Path | None, texture_name: str) -> Path | None:
-    if texture_root is None:
-        return None
-    # ``texture_name`` comes from the untrusted BSP file; reject any attempt
-    # to escape ``texture_root`` via absolute paths or ``..`` segments.
-    candidates = [
-        qb_paths.safe_join_under_root(texture_root, f"{texture_name}.wal"),
-        qb_paths.safe_join_under_root(texture_root, "textures", f"{texture_name}.wal"),
-    ]
-    for cand in candidates:
-        if cand is not None and cand.exists():
-            return cand
-    # Case-insensitive walk fallback (already contained under root because
-    # rglob only yields real paths beneath texture_root).
-    needle = (texture_name + ".wal").lower().replace("\\", "/")
-    if texture_root.exists():
-        for path in texture_root.rglob("*.wal"):
-            rel = str(path.relative_to(texture_root)).lower().replace("\\", "/")
-            if rel.endswith(needle) or rel == needle:
-                return path
-    return None
-
-
-def _build_q2_materials(bsp: bsp_q2.Bsp,
-                        texture_root: Path | None) -> dict[str, bpy.types.Material]:
+def _build_q2_materials(operator: bpy.types.Operator,
+                        bsp: bsp_q2.Bsp,
+                        texture_index: qb_paths.TextureRootIndex | None,
+                        ) -> dict[str, bpy.types.Material]:
     pal = palette_mod.load_bundled("q2")
     out: dict[str, bpy.types.Material] = {}
     for ti in bsp.texinfos:
         if ti.texture_name in out:
             continue
-        wal_path = _resolve_wal(texture_root, ti.texture_name)
-        if wal_path is None:
+        info = (
+            texture_index.resolve(ti.texture_name, kind="wal")
+            if texture_index is not None
+            else None
+        )
+        if info is None:
             # Fallback: blank 64×64 magenta material so the slot index stays valid.
-            placeholder = bpy.data.materials.get(ti.texture_name) or bpy.data.materials.new(
-                ti.texture_name
+            placeholder = builder_materials.get_or_create_placeholder_material(
+                ti.texture_name,
+                asset_key=f"placeholder|q2|{ti.texture_name.casefold()}",
             )
             out[ti.texture_name] = placeholder
             continue
-        wal = wal_mod.read_wal_path(wal_path)
-        out[ti.texture_name] = builder_materials.material_from_wal(wal, pal)
+        wal_path, _ = info
+        try:
+            wal = wal_mod.read_wal_path(wal_path)
+            source_key = qb_paths.file_asset_key(
+                wal_path,
+                namespace="wal",
+                member=ti.texture_name,
+            )
+            out[ti.texture_name] = builder_materials.material_from_wal(
+                wal,
+                pal,
+                source_key=source_key,
+            )
+        except (OSError, ValueError) as exc:
+            qb_log.report(
+                operator,
+                {"WARNING"},
+                f"Failed to load WAL texture '{ti.texture_name}' from "
+                f"'{wal_path}': {exc}",
+            )
+            out[ti.texture_name] = (
+                builder_materials.get_or_create_placeholder_material(
+                    ti.texture_name,
+                    asset_key=(
+                        "placeholder|q2-load-failed|"
+                        f"{wal_path.as_posix().casefold()}|"
+                        f"{ti.texture_name.casefold()}"
+                    ),
+                )
+            )
     return out
 
 
@@ -214,7 +236,13 @@ def _import_q2(operator: bpy.types.Operator, context: bpy.types.Context,
     texture_root = _resolve_texture_root(operator, context)
 
     bsp = bsp_q2.read_path(filepath)
-    materials_by_name = _build_q2_materials(bsp, texture_root)
+    bsp.validate()
+    texture_index = (
+        qb_paths.TextureRootIndex(texture_root)
+        if texture_root is not None
+        else None
+    )
+    materials_by_name = _build_q2_materials(operator, bsp, texture_index)
 
     material_list: list[bpy.types.Material] = []
     name_to_slot: dict[str, int] = {}
@@ -275,55 +303,48 @@ def _import_q2(operator: bpy.types.Operator, context: bpy.types.Context,
 # ============================================================ Quake 3 ======
 
 
-_Q3_TEXTURE_EXTS = (".tga", ".jpg", ".jpeg", ".png")
-
-
-def _resolve_q3_texture(texture_root: Path | None, name: str) -> Path | None:
-    if texture_root is None:
-        return None
-    base = qb_paths.safe_join_under_root(texture_root, name)
-    if base is None:
-        return None
-    for ext in _Q3_TEXTURE_EXTS:
-        cand = base.with_suffix(ext)
-        if cand.exists():
-            return cand
-    # Some BSPs already include the extension on the texture name.
-    if base.exists() and base.suffix.lower() in _Q3_TEXTURE_EXTS:
-        return base
-    return None
-
-
 def _build_q3_materials(operator: bpy.types.Operator,
                         bsp: bsp_q3.Bsp,
-                        texture_root: Path | None) -> list[bpy.types.Material]:
+                        texture_index: qb_paths.TextureRootIndex | None,
+                        ) -> list[bpy.types.Material]:
     out: list[bpy.types.Material] = []
     for tex in bsp.textures:
-        mat = bpy.data.materials.get(tex.name)
-        if mat is None:
-            mat = bpy.data.materials.new(tex.name)
-            mat.use_nodes = True
-            nt = mat.node_tree
-            nt.nodes.clear()
-            output = nt.nodes.new("ShaderNodeOutputMaterial")
-            bsdf = nt.nodes.new("ShaderNodeBsdfPrincipled")
-            bsdf.inputs["Roughness"].default_value = 1.0
-            nt.links.new(bsdf.outputs[0], output.inputs[0])
-
-            path = _resolve_q3_texture(texture_root, tex.name)
-            if path is not None:
-                try:
-                    img = bpy.data.images.load(str(path), check_existing=True)
-                    tex_node = nt.nodes.new("ShaderNodeTexImage")
-                    tex_node.image = img
-                    tex_node.interpolation = "Closest"
-                    nt.links.new(tex_node.outputs["Color"], bsdf.inputs["Base Color"])
-                except RuntimeError as exc:
-                    qb_log.report(
-                        operator,
-                        {"WARNING"},
-                        f"Failed to load texture image '{tex.name}' from '{path}': {exc}",
-                    )
+        info = (
+            texture_index.resolve(tex.name, kind="image")
+            if texture_index is not None
+            else None
+        )
+        if info is None:
+            mat = builder_materials.get_or_create_placeholder_material(
+                tex.name,
+                asset_key=f"placeholder|q3|{tex.name.casefold()}",
+            )
+        else:
+            path, _ = info
+            try:
+                source_key = qb_paths.file_asset_key(
+                    path,
+                    namespace="q3-image",
+                    member=tex.name,
+                )
+                mat = builder_materials.material_from_external_image(
+                    tex.name,
+                    path,
+                    source_key=source_key,
+                )
+            except (OSError, ValueError, RuntimeError) as exc:
+                qb_log.report(
+                    operator,
+                    {"WARNING"},
+                    f"Failed to load texture image '{tex.name}' from '{path}': {exc}",
+                )
+                mat = builder_materials.get_or_create_placeholder_material(
+                    tex.name,
+                    asset_key=(
+                        f"placeholder|q3-load-failed|{path.as_posix().casefold()}|"
+                        f"{tex.name.casefold()}"
+                    ),
+                )
         out.append(mat)
     return out
 
@@ -335,7 +356,13 @@ def _import_q3(operator: bpy.types.Operator, context: bpy.types.Context,
     texture_root = _resolve_texture_root(operator, context)
 
     bsp = bsp_q3.read_path(filepath)
-    material_list = _build_q3_materials(operator, bsp, texture_root)
+    bsp.validate()
+    texture_index = (
+        qb_paths.TextureRootIndex(texture_root)
+        if texture_root is not None
+        else None
+    )
+    material_list = _build_q3_materials(operator, bsp, texture_index)
 
     scene = context.scene
     root = bpy.data.collections.new(filepath.stem)
@@ -408,7 +435,7 @@ def _import_q3(operator: bpy.types.Operator, context: bpy.types.Context,
             continue
 
         flipped_quads = [[(u, 1.0 - v) for (u, v) in (tess.uvs[i] for i in q)] for q in tess.quads]
-        builder_geometry.build_bsp_geometry(
+        patch_obj = builder_geometry.build_bsp_geometry(
             name=f"{filepath.stem}_patch_{fi}",
             vertices=tess.vertices,
             face_polygons=[list(q) for q in tess.quads],
@@ -419,13 +446,10 @@ def _import_q3(operator: bpy.types.Operator, context: bpy.types.Context,
             scale=scale,
         )
         # Stash the original control grid for future export.
-        patch_obj_name = f"{filepath.stem}_patch_{fi}"
-        obj = bpy.data.objects.get(patch_obj_name)
-        if obj is not None:
-            obj["qb_patch_control_grid"] = [
-                [c.pos.x, c.pos.y, c.pos.z, c.uv[0], c.uv[1]] for c in controls
-            ]
-            obj["qb_patch_size"] = [cw, ch]
+        patch_obj["qb_patch_control_grid"] = [
+            [c.pos.x, c.pos.y, c.pos.z, c.uv[0], c.uv[1]] for c in controls
+        ]
+        patch_obj["qb_patch_size"] = [cw, ch]
 
     if getattr(operator, "import_entities", True):
         ent_coll = bpy.data.collections.new(f"{filepath.stem}_Entities")

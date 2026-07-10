@@ -4,11 +4,23 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "quakeblend"
-version = "0.1.0"
+version = "1.1.0"
 description = "Blender 5.0+ extension for importing Quake 1/2/3 maps and textures (development tooling only)"
 requires-python = ">=3.11"
+
+[project.optional-dependencies]
+dev = [
+	"pytest>=8",
+	"ruff>=0.6",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
 pythonpath = ["."]
+
+[tool.setuptools.package-data]
+"quakeblend.data" = ["*.lmp"]
+
+[tool.ruff]
+target-version = "py311"

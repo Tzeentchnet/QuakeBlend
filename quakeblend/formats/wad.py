@@ -35,7 +35,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO
 
-from ..utils.constants import WAD2_MAGIC, WAD3_MAGIC, WAD_TYPE_MIPTEX
+from ..utils.constants import (
+    MAX_TEXTURE_DIMENSION, MAX_TEXTURE_PIXELS,
+    WAD2_MAGIC, WAD3_MAGIC, WAD_TYPE_MIPTEX,
+)
 from .common import BinaryReader, read_exact
 
 
@@ -45,6 +48,7 @@ class WadEntry:
     type: int
     offset: int
     size: int
+    disk_size: int
     compression: int
 
 
@@ -88,7 +92,14 @@ def _read_directory(r: BinaryReader, count: int) -> list[WadEntry]:
         r.read(2)  # padding
         name = r.fixed_string(16)
         entries.append(
-            WadEntry(name=name, type=etype, offset=offset, size=size, compression=compression)
+            WadEntry(
+                name=name,
+                type=etype,
+                offset=offset,
+                size=size,
+                disk_size=dsize,
+                compression=compression,
+            )
         )
     return entries
 
@@ -109,14 +120,33 @@ def read_miptex(stream: BinaryIO, *, base_offset: int, payload_size: int,
     width = r.u32()
     height = r.u32()
     offsets = [r.u32() for _ in range(4)]
+    if width == 0 or height == 0:
+        raise ValueError(f"miptex dimensions must be positive, got {width}×{height}")
+    if width > MAX_TEXTURE_DIMENSION or height > MAX_TEXTURE_DIMENSION:
+        raise ValueError(
+            f"miptex dimensions exceed {MAX_TEXTURE_DIMENSION}: {width}×{height}"
+        )
+    if width * height > MAX_TEXTURE_PIXELS:
+        raise ValueError(f"miptex pixel count is too large: {width}×{height}")
+    if payload_size < 40:
+        raise EOFError(f"miptex payload is too short: {payload_size} bytes")
 
     mip_pixels: list[bytes] = []
     for level, off in enumerate(offsets):
         w = max(1, width >> level)
         h = max(1, height >> level)
         if off == 0:
+            if level == 0:
+                raise ValueError("primary mip offset must be nonzero")
             mip_pixels.append(b"")
             continue
+        if off < 40:
+            raise ValueError(f"mip {level} offset {off} points inside the miptex header")
+        if off + w * h > payload_size:
+            raise EOFError(
+                f"mip {level} exceeds miptex payload: "
+                f"offset={off}, size={w * h}, payload_size={payload_size}"
+            )
         stream.seek(base_offset + off)
         mip_pixels.append(read_exact(stream, w * h))
 
@@ -147,20 +177,49 @@ def read_miptex(stream: BinaryIO, *, base_offset: int, payload_size: int,
 
 
 def read_wad(stream: BinaryIO) -> Wad:
+    original_position = stream.tell()
+    stream.seek(0, 2)
+    file_size = stream.tell()
+    stream.seek(original_position)
     r = BinaryReader(stream)
     flavour, numentries, diroffset = _read_header(r)
+    if numentries < 0:
+        raise ValueError(f"WAD directory entry count must be nonnegative, got {numentries}")
+    if diroffset < 12:
+        raise ValueError(f"WAD directory offset points inside the header: {diroffset}")
+    directory_end = diroffset + numentries * 32
+    if diroffset > file_size or directory_end > file_size:
+        raise EOFError(
+            f"WAD directory exceeds file bounds: offset={diroffset}, "
+            f"entries={numentries}, file_size={file_size}"
+        )
     stream.seek(diroffset)
     entries = _read_directory(r, numentries)
 
     textures: list[MipTexture] = []
     for entry in entries:
+        if entry.offset < 0 or entry.disk_size < 0 or entry.size < 0:
+            raise ValueError(
+                f"invalid WAD entry bounds for {entry.name!r}: "
+                f"offset={entry.offset}, disk_size={entry.disk_size}, size={entry.size}"
+            )
+        if entry.offset + entry.disk_size > file_size:
+            raise EOFError(
+                f"WAD entry {entry.name!r} exceeds file bounds: "
+                f"offset={entry.offset}, size={entry.disk_size}, file_size={file_size}"
+            )
         if entry.type != WAD_TYPE_MIPTEX:
             continue
+        if entry.compression != 0:
+            raise ValueError(
+                f"compressed WAD miptex {entry.name!r} is not supported "
+                f"(compression={entry.compression})"
+            )
         textures.append(
             read_miptex(
                 stream,
                 base_offset=entry.offset,
-                payload_size=entry.size,
+                payload_size=entry.disk_size,
                 expect_palette=(flavour == "WAD3"),
             )
         )

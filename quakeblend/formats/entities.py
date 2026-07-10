@@ -7,7 +7,10 @@ strings; backslash escapes are honoured.
 
 from __future__ import annotations
 
+import math
 from typing import List, Dict
+
+from .common import parse_finite_float
 
 
 def _skip_whitespace(text: str, i: int) -> int:
@@ -83,4 +86,25 @@ def parse_origin(value: str) -> tuple[float, float, float]:
     parts = value.split()
     if len(parts) < 3:
         raise ValueError(f"origin must have 3 components, got {value!r}")
-    return (float(parts[0]), float(parts[1]), float(parts[2]))
+    return tuple(
+        parse_finite_float(part, context="origin component")
+        for part in parts[:3]
+    )  # type: ignore[return-value]
+
+
+def parse_color(value: str) -> tuple[float, float, float]:
+    """Parse either normalized ``0..1`` or byte-range ``0..255`` RGB."""
+    parts = value.split()
+    if len(parts) < 3:
+        raise ValueError(f"color must have 3 components, got {value!r}")
+    try:
+        components = [float(part) for part in parts[:3]]
+    except ValueError as exc:
+        raise ValueError(f"color components must be numeric, got {value!r}") from exc
+    if not all(math.isfinite(component) for component in components):
+        raise ValueError(f"color components must be finite, got {value!r}")
+    divisor = 255.0 if any(abs(component) > 1.0 for component in components) else 1.0
+    return tuple(
+        min(1.0, max(0.0, component / divisor))
+        for component in components
+    )  # type: ignore[return-value]

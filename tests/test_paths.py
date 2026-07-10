@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from quakeblend.utils import paths as qb_paths
 
 
@@ -48,3 +50,66 @@ def test_safe_join_traversal_that_stays_inside_root_is_allowed(tmp_path: Path) -
     result = qb_paths.safe_join_under_root(tmp_path, "sub/../file.wal")
     assert result is not None
     assert result.resolve() == (tmp_path / "file.wal").resolve()
+
+
+def test_file_asset_key_is_stable_and_member_specific(tmp_path: Path) -> None:
+    archive = tmp_path / "textures.wad"
+    archive.write_bytes(b"revision one")
+
+    first = qb_paths.file_asset_key(archive, namespace="wad", member="BRICK")
+    same = qb_paths.file_asset_key(archive, namespace="wad", member="brick")
+    other_member = qb_paths.file_asset_key(archive, namespace="wad", member="metal")
+
+    assert first == same
+    assert first != other_member
+
+
+def test_file_asset_key_rejects_missing_file(tmp_path: Path) -> None:
+    with pytest.raises(FileNotFoundError):
+        qb_paths.file_asset_key(tmp_path / "missing.wad", namespace="wad")
+
+
+def test_texture_root_index_resolves_case_insensitive_aliases(tmp_path: Path) -> None:
+    texture = tmp_path / "Textures" / "Base_Wall" / "Brick.WAL"
+    texture.parent.mkdir(parents=True)
+    texture.write_bytes(b"wal")
+
+    index = qb_paths.TextureRootIndex(tmp_path)
+
+    assert index.resolve("base_wall/brick") == (texture.resolve(), "wal")
+    assert index.resolve("TEXTURES/BASE_WALL/BRICK.WAL") == (texture.resolve(), "wal")
+
+
+def test_texture_root_index_honors_kind_and_wal_precedence(tmp_path: Path) -> None:
+    wal = tmp_path / "stone.wal"
+    image = tmp_path / "stone.PNG"
+    wal.write_bytes(b"wal")
+    image.write_bytes(b"png")
+
+    index = qb_paths.TextureRootIndex(tmp_path)
+
+    assert index.resolve("stone") == (wal.resolve(), "wal")
+    assert index.resolve("stone", kind="image") == (image.resolve(), "image")
+    assert index.resolve("stone.png") == (image.resolve(), "image")
+
+
+def test_texture_root_index_prefers_exact_path_over_suffix_alias(tmp_path: Path) -> None:
+    exact = tmp_path / "brick.wal"
+    nested = tmp_path / "a" / "brick.wal"
+    nested.parent.mkdir()
+    exact.write_bytes(b"exact")
+    nested.write_bytes(b"nested")
+
+    index = qb_paths.TextureRootIndex(tmp_path)
+
+    assert index.resolve("brick", kind="wal") == (exact.resolve(), "wal")
+    assert index.resolve("a/brick", kind="wal") == (nested.resolve(), "wal")
+
+
+def test_texture_root_index_rejects_unsafe_and_unsupported_names(tmp_path: Path) -> None:
+    (tmp_path / "notes.txt").write_text("not a texture", encoding="ascii")
+    index = qb_paths.TextureRootIndex(tmp_path)
+
+    assert index.resolve("../secret") is None
+    assert index.resolve("C:/secret") is None
+    assert index.resolve("notes") is None

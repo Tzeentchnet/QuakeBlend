@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import math
+from dataclasses import replace
+from pathlib import Path
 
-from quakeblend.formats import map_q1, map_writer
+import pytest
+
+from quakeblend.formats import brushdef3, map_q1, map_writer
 
 
 CUBE_Q1 = """
@@ -161,6 +165,15 @@ def test_q1_round_trip_structural() -> None:
     assert mf2.entities[1].properties["origin"] == "0 0 24"
 
 
+def test_entity_property_escapes_round_trip() -> None:
+    source = '{\n"classname" "worldspawn"\n"message" "line 1\\nquote: \\"ok\\" path: c:\\\\quake"\n}\n'
+    parsed = map_q1.parse(source)
+    assert parsed.entities[0].properties["message"] == 'line 1\nquote: "ok" path: c:\\quake'
+
+    reparsed = map_q1.parse(map_writer.serialize(parsed, dialect="q1"))
+    assert reparsed.entities[0].properties == parsed.entities[0].properties
+
+
 def test_q1_round_trip_multi_brush_entity_preserves_all_brushes() -> None:
     mf = map_q1.parse(MULTI_BRUSH_Q1)
     text = map_writer.serialize(mf, dialect="q1")
@@ -231,6 +244,50 @@ def test_force_standard_strips_valve220() -> None:
     assert "[" not in text
 
 
+def test_force_valve220_converts_standard_faces() -> None:
+    mf = map_q1.parse(MULTI_BRUSH_Q1)
+    text = map_writer.serialize(mf, dialect="q1", projection="valve220")
+    reparsed = map_q1.parse(text)
+    assert all(
+        face.tex.is_valve220
+        for brush in reparsed.entities[0].brushes
+        for face in brush.faces
+    )
+
+
+def test_forced_projection_round_trip_preserves_standard_parameters() -> None:
+    original = map_q1.parse(MULTI_BRUSH_Q1)
+    valve_text = map_writer.serialize(original, dialect="q1", projection="valve220")
+    valve = map_q1.parse(valve_text)
+    standard_text = map_writer.serialize(valve, dialect="q1", projection="standard")
+    reparsed = map_q1.parse(standard_text)
+
+    expected = original.entities[0].brushes[0].faces[0].tex
+    actual = reparsed.entities[0].brushes[0].faces[0].tex
+    assert math.isclose(actual.xoffset, expected.xoffset, abs_tol=1e-5)
+    assert math.isclose(actual.yoffset, expected.yoffset, abs_tol=1e-5)
+    assert math.isclose(actual.rotation, expected.rotation, abs_tol=1e-5)
+    assert math.isclose(actual.xscale, expected.xscale, abs_tol=1e-5)
+    assert math.isclose(actual.yscale, expected.yscale, abs_tol=1e-5)
+
+
+def test_forced_standard_reports_sheared_valve220_projection() -> None:
+    mf = map_q1.parse(MULTI_BRUSH_Q1)
+    face = map_writer._as_valve220(mf.entities[0].brushes[0].faces[0])
+    assert face.tex.s_axis is not None and face.tex.t_axis is not None
+    face = replace(
+        face,
+        tex=replace(face.tex, t_axis=face.tex.t_axis + face.tex.s_axis * 0.25),
+    )
+    mf.entities[0].brushes[0].faces[0] = face
+
+    messages = map_writer.projection_conversion_warnings(mf, "standard")
+
+    assert len(messages) == 1
+    assert "entity 0 brush 0 face 0" in messages[0]
+    assert "not exactly representable" in messages[0]
+
+
 Q3_PATCH_AND_BRUSHDEF3 = """
 {
 "classname" "worldspawn"
@@ -268,3 +325,51 @@ def test_q3_round_trip_preserves_kinds() -> None:
     kinds = [b.raw_kind for b in mf2.entities[0].brushes]
     assert "patchDef2" in kinds
     assert "brushDef3" in kinds
+    brush = next(b for b in mf2.entities[0].brushes if b.raw_kind == "brushDef3")
+    assert len(brushdef3.parse_brushdef3_block(brush.raw_payload).faces) == 6
+
+
+def test_q3_patch_raw_payload_preserves_header_comments_and_precision() -> None:
+    source = """
+    {
+    "classname" "worldspawn"
+    {
+    patchDef2
+    {
+    // Preserve editor-specific header fields and precision.
+    textures/test/patch
+    ( 3 3 7 8 9 )
+    (
+    ( ( 0.123456789 0 0 0 0 ) ( 1 0 0 0.5 0 ) ( 2 0 0 1 0 ) )
+    ( ( 0 1 0 0 0.5 ) ( 1 1 1 0.5 0.5 ) ( 2 1 0 1 0.5 ) )
+    ( ( 0 2 0 0 1 ) ( 1 2 0 0.5 1 ) ( 2 2 0 1 1 ) )
+    )
+    }
+    }
+    }
+    """
+
+    output = map_writer.serialize(map_q1.parse(source), dialect="q3")
+
+    assert "// Preserve editor-specific header fields and precision." in output
+    assert "( 3 3 7 8 9 )" in output
+    assert "0.123456789" in output
+
+
+def test_serialize_path_does_not_partially_overwrite_destination(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    destination = tmp_path / "output.map"
+    destination.write_text("existing map", encoding="utf-8")
+    original_write_text = Path.write_text
+
+    def fail_after_partial_write(path: Path, text: str, **kwargs) -> int:
+        original_write_text(path, text[:8], **kwargs)
+        raise OSError("simulated write failure")
+
+    monkeypatch.setattr(Path, "write_text", fail_after_partial_write)
+
+    with pytest.raises(OSError, match="simulated write failure"):
+        map_writer.serialize_path(map_q1.parse(CUBE_Q1), destination, dialect="q1")
+
+    assert destination.read_text(encoding="utf-8") == "existing map"

@@ -62,13 +62,26 @@ def build_map_brush(brush: MapBrush, faces: Sequence[BrushFace], name: str,
             if mat is not None:
                 obj.data.materials.append(mat)
             else:
-                obj.data.materials.append(bpy.data.materials.new(face.texture))
+                from . import builder_materials
+                obj.data.materials.append(
+                    builder_materials.get_or_create_placeholder_material(
+                        face.texture,
+                        asset_key=f"placeholder|map|{face.texture.casefold()}",
+                    )
+                )
                 slot_index[face.texture] = len(obj.data.materials) - 1
 
     uv_layer = bm.loops.layers.uv.new("UVMap")
+    bm_vertex_by_position = {}
     for face in valid:
-        bm_verts = [bm.verts.new((v.x * scale, v.y * scale, v.z * scale))
-                    for v in face.vertices]
+        bm_verts = []
+        for vertex in face.vertices:
+            position = (vertex.x * scale, vertex.y * scale, vertex.z * scale)
+            bm_vertex = bm_vertex_by_position.get(position)
+            if bm_vertex is None:
+                bm_vertex = bm.verts.new(position)
+                bm_vertex_by_position[position] = bm_vertex
+            bm_verts.append(bm_vertex)
         try:
             bm_face = bm.faces.new(bm_verts)
         except ValueError:
@@ -97,9 +110,11 @@ def _project_uv(tex: MapTexInfo, p: Vec3, tex_size: tuple[int, int],
                 normal: Vec3 | None = None) -> tuple[float, float]:
     """Project a world-space point to UV using either Valve220 or Standard math."""
     w, h = tex_size
+    xscale = math.copysign(max(abs(tex.xscale), 1e-6), tex.xscale or 1.0)
+    yscale = math.copysign(max(abs(tex.yscale), 1e-6), tex.yscale or 1.0)
     if tex.is_valve220 and tex.s_axis is not None and tex.t_axis is not None:
-        u = (p.dot(tex.s_axis) / max(tex.xscale, 1e-6) + tex.s_offset) / max(w, 1)
-        v = (p.dot(tex.t_axis) / max(tex.yscale, 1e-6) + tex.t_offset) / max(h, 1)
+        u = (p.dot(tex.s_axis) / xscale + tex.s_offset) / max(w, 1)
+        v = (p.dot(tex.t_axis) / yscale + tex.t_offset) / max(h, 1)
         return u, v
     # Standard projection: pick s/t axes from the face normal using the
     # idTech ``TextureAxisFromPlane`` table. Fall back to the X/Y plane
@@ -116,8 +131,8 @@ def _project_uv(tex: MapTexInfo, p: Vec3, tex_size: tuple[int, int],
     # Apply rotation around (0,0).
     sr = s * cos_r - t * sin_r
     tr = s * sin_r + t * cos_r
-    u = (sr / max(tex.xscale, 1e-6) + tex.xoffset) / max(w, 1)
-    v = (tr / max(tex.yscale, 1e-6) + tex.yoffset) / max(h, 1)
+    u = (sr / xscale + tex.xoffset) / max(w, 1)
+    v = (tr / yscale + tex.yoffset) / max(h, 1)
     return u, v
 
 

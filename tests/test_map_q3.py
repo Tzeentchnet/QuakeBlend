@@ -38,6 +38,7 @@ brushDef3
 
 def test_map_q3_patches_iterate() -> None:
     mf = map_q3.parse(Q3_MAP)
+    assert map_q3.detect_game(mf) == "q3"
     assert len(mf.entities) == 1
     brushes = mf.entities[0].brushes
     assert {b.raw_kind for b in brushes} == {"patchDef2", "brushDef3"}

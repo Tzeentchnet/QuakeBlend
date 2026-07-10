@@ -25,9 +25,11 @@ class IMPORT_OT_quake_wad(bpy.types.Operator, ImportHelper):
 
     def execute(self, context: bpy.types.Context) -> set[str]:
         from . import import_runner_wad
+        from .transaction import ImportTransaction
 
         try:
-            count = import_runner_wad.run(self, context, os.fspath(self.filepath))
+            with ImportTransaction():
+                count = import_runner_wad.run(self, context, os.fspath(self.filepath))
         except Exception as exc:  # pragma: no cover
             self.report({"ERROR"}, f"Texture import failed: {exc}")
             return {"CANCELLED"}

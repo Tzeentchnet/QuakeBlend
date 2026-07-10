@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO
 
+from ..utils.constants import MAX_TEXTURE_DIMENSION, MAX_TEXTURE_PIXELS
 from .common import BinaryReader, read_exact
 
 WAL_HEADER_SIZE = 100
@@ -50,6 +51,10 @@ class Wal:
 
 
 def read_wal(stream: BinaryIO) -> Wal:
+    original_position = stream.tell()
+    stream.seek(0, 2)
+    file_size = stream.tell()
+    stream.seek(original_position)
     r = BinaryReader(stream)
     name = r.fixed_string(32)
     width = r.u32()
@@ -59,11 +64,26 @@ def read_wal(stream: BinaryIO) -> Wal:
     flags = r.u32()
     contents = r.u32()
     value = r.u32()
+    if width == 0 or height == 0:
+        raise ValueError(f"WAL dimensions must be positive, got {width}×{height}")
+    if width > MAX_TEXTURE_DIMENSION or height > MAX_TEXTURE_DIMENSION:
+        raise ValueError(
+            f"WAL dimensions exceed {MAX_TEXTURE_DIMENSION}: {width}×{height}"
+        )
+    if width * height > MAX_TEXTURE_PIXELS:
+        raise ValueError(f"WAL pixel count is too large: {width}×{height}")
 
     mips: list[bytes] = []
     for level, off in enumerate(offsets):
         w = max(1, width >> level)
         h = max(1, height >> level)
+        if off < WAL_HEADER_SIZE:
+            raise ValueError(f"WAL mip {level} offset {off} points inside the header")
+        if off + w * h > file_size:
+            raise EOFError(
+                f"WAL mip {level} exceeds file bounds: "
+                f"offset={off}, size={w * h}, file_size={file_size}"
+            )
         stream.seek(off)
         mips.append(read_exact(stream, w * h))
 

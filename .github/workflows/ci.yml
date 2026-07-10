@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test-and-build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install development dependencies
+        run: python -m pip install --upgrade pip ".[dev]"
+
+      - name: Lint
+        run: ruff check .
+
+      - name: Test
+        run: python -m pytest
+
+      - name: Build fallback extension archive
+        shell: pwsh
+        run: ./scripts/build_extension.ps1 -BlenderExe ""
+
+      - name: Validate extension archive
+        shell: pwsh
+        run: |
+          $zip = Get-ChildItem ./dist/quakeblend-*.zip | Select-Object -First 1
+          if ($null -eq $zip) { throw "Extension archive was not created" }
+          $expanded = Join-Path $env:RUNNER_TEMP "quakeblend-extension"
+          Expand-Archive -Path $zip.FullName -DestinationPath $expanded
+          $required = @(
+            "blender_manifest.toml",
+            "__init__.py",
+            "blender/importer_map.py",
+            "blender/transaction.py",
+            "data/palette_q1.lmp",
+            "data/palette_q2.lmp",
+            "LICENSE"
+          )
+          foreach ($entry in $required) {
+            if (-not (Test-Path (Join-Path $expanded $entry))) {
+              throw "Extension archive is missing $entry"
+            }
+          }
+          $forbidden = Get-ChildItem $expanded -Recurse -Force | Where-Object {
+            $_.Name -eq "__pycache__" -or $_.Extension -eq ".pyc"
+          }
+          if ($forbidden) { throw "Extension archive contains Python cache files" }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: quakeblend-extension
+          path: dist/quakeblend-*.zip

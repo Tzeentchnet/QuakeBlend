@@ -26,8 +26,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import BinaryIO, List
 
-from ..utils.constants import BSP_VERSION_Q3, IBSP_MAGIC
-from .common import BinaryReader, Vec3
+from ..utils.constants import BSP_VERSION_Q3, IBSP_MAGIC, MAX_PATCH_DIMENSION
+from .common import BinaryReader, Vec3, require_finite
 from .entities import parse_entities
 
 NUM_LUMPS = 17
@@ -109,6 +109,91 @@ class Bsp:
     meshverts: List[int] = field(default_factory=list)
     faces: List[Face] = field(default_factory=list)
     lightmaps: List[bytes] = field(default_factory=list)
+
+    def validate(self) -> None:
+        valid_types = {
+            FACE_TYPE_POLY, FACE_TYPE_PATCH, FACE_TYPE_MESH, FACE_TYPE_BILLBOARD,
+        }
+        for vertex_index, vertex in enumerate(self.vertices):
+            require_finite(
+                vertex.pos,
+                context=f"corrupt BSP: vertex {vertex_index} position",
+            )
+            require_finite(
+                vertex.tex_uv,
+                context=f"corrupt BSP: vertex {vertex_index} texture UV",
+            )
+            require_finite(
+                vertex.lm_uv,
+                context=f"corrupt BSP: vertex {vertex_index} lightmap UV",
+            )
+            require_finite(
+                vertex.normal,
+                context=f"corrupt BSP: vertex {vertex_index} normal",
+            )
+        for face_index, face in enumerate(self.faces):
+            require_finite(
+                (*face.lm_origin, *face.lm_vec0, *face.lm_vec1, *face.normal),
+                context=f"corrupt BSP: face {face_index} vectors",
+            )
+            if face.type not in valid_types:
+                raise ValueError(
+                    f"corrupt BSP: face {face_index} has unknown type {face.type}"
+                )
+            if not 0 <= face.texture < len(self.textures):
+                raise ValueError(
+                    f"corrupt BSP: face {face_index} texture {face.texture} "
+                    f"out of range (texture_count={len(self.textures)})"
+                )
+            if face.vertex < 0 or face.n_vertexes < 0:
+                raise ValueError(
+                    f"corrupt BSP: face {face_index} has negative vertex range"
+                )
+            if face.vertex + face.n_vertexes > len(self.vertices):
+                raise ValueError(
+                    f"corrupt BSP: face {face_index} vertex range "
+                    f"[{face.vertex}, {face.vertex + face.n_vertexes}) out of range "
+                    f"(vertex_count={len(self.vertices)})"
+                )
+            if face.meshvert < 0 or face.n_meshverts < 0:
+                raise ValueError(
+                    f"corrupt BSP: face {face_index} has negative meshvert range"
+                )
+            if face.meshvert + face.n_meshverts > len(self.meshverts):
+                raise ValueError(
+                    f"corrupt BSP: face {face_index} meshvert range "
+                    f"[{face.meshvert}, {face.meshvert + face.n_meshverts}) out of range "
+                    f"(meshvert_count={len(self.meshverts)})"
+                )
+            for relative_index in self.meshverts[
+                face.meshvert:face.meshvert + face.n_meshverts
+            ]:
+                if not 0 <= relative_index < face.n_vertexes:
+                    raise ValueError(
+                        f"corrupt BSP: face {face_index} meshvert {relative_index} "
+                        f"out of relative vertex range (vertex_count={face.n_vertexes})"
+                    )
+            if (face.type in (FACE_TYPE_POLY, FACE_TYPE_MESH)
+                    and face.n_meshverts % 3 != 0):
+                raise ValueError(
+                    f"corrupt BSP: face {face_index} meshvert count "
+                    f"{face.n_meshverts} is not a multiple of 3"
+                )
+            if face.type == FACE_TYPE_PATCH:
+                width, height = face.size
+                if (width < 3 or height < 3 or width % 2 == 0 or height % 2 == 0
+                        or width > MAX_PATCH_DIMENSION
+                        or height > MAX_PATCH_DIMENSION
+                        or width * height != face.n_vertexes):
+                    raise ValueError(
+                        f"corrupt BSP: face {face_index} has invalid patch grid "
+                        f"{width}×{height} for {face.n_vertexes} vertices"
+                    )
+            if face.lm_index != -1 and not 0 <= face.lm_index < len(self.lightmaps):
+                raise ValueError(
+                    f"corrupt BSP: face {face_index} lightmap {face.lm_index} "
+                    f"out of range (lightmap_count={len(self.lightmaps)})"
+                )
 
 
 def _read_lumps(r: BinaryReader) -> list[Lump]:

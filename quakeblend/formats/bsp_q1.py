@@ -21,7 +21,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import BinaryIO, List
 
-from .common import BinaryReader, Vec3
+from ..utils.constants import MAX_TEXTURE_DIMENSION, MAX_TEXTURE_PIXELS
+from .common import BinaryReader, Vec3, require_finite
 from .entities import parse_entities
 
 BSP_VERSION = 29
@@ -102,6 +103,49 @@ class Bsp:
     miptextures: List[MipTexture | None] = field(default_factory=list)
     lighting: bytes = b""
 
+    def validate(self) -> None:
+        for vertex_index, vertex in enumerate(self.vertices):
+            require_finite(
+                vertex,
+                context=f"corrupt BSP: vertex {vertex_index}",
+            )
+        for texinfo_index, texinfo in enumerate(self.texinfos):
+            require_finite(
+                (*texinfo.s_axis, texinfo.s_offset,
+                 *texinfo.t_axis, texinfo.t_offset),
+                context=f"corrupt BSP: texinfo {texinfo_index} projection",
+            )
+        for edge_index, edge in enumerate(self.edges):
+            for vertex_index in (edge.v0, edge.v1):
+                if not 0 <= vertex_index < len(self.vertices):
+                    raise ValueError(
+                        f"corrupt BSP: edge {edge_index} vertex {vertex_index} "
+                        f"out of range (vertex_count={len(self.vertices)})"
+                    )
+        for face_index, face in enumerate(self.faces):
+            if face.ledge_num < 0:
+                raise ValueError(f"corrupt BSP: face {face_index} has negative edge count")
+            if face.ledge_id < 0 or face.ledge_id + face.ledge_num > len(self.ledges):
+                raise ValueError(
+                    f"corrupt BSP: face {face_index} ledge range "
+                    f"[{face.ledge_id}, {face.ledge_id + face.ledge_num}) out of range "
+                    f"(ledge_count={len(self.ledges)})"
+                )
+            if not 0 <= face.texinfo_id < len(self.texinfos):
+                raise ValueError(
+                    f"corrupt BSP: face {face_index} texinfo {face.texinfo_id} "
+                    f"out of range (texinfo_count={len(self.texinfos)})"
+                )
+            self.face_polygon(face)
+        for texinfo_index, texinfo in enumerate(self.texinfos):
+            if (texinfo.miptex_index != 0xFFFFFFFF
+                    and not 0 <= texinfo.miptex_index < len(self.miptextures)):
+                raise ValueError(
+                    f"corrupt BSP: texinfo {texinfo_index} miptex "
+                    f"{texinfo.miptex_index} out of range "
+                    f"(miptex_count={len(self.miptextures)})"
+                )
+
     # Built per face: ordered vertex indices forming the face polygon.
     def face_polygon(self, face: Face) -> List[int]:
         verts: list[int] = []
@@ -121,6 +165,11 @@ class Bsp:
                 )
             edge = self.edges[edge_idx]
             v = edge.v0 if sledge >= 0 else edge.v1
+            if not 0 <= v < len(self.vertices):
+                raise ValueError(
+                    f"corrupt BSP: vertex index {v} out of range "
+                    f"(max {len(self.vertices) - 1})"
+                )
             verts.append(v)
         return verts
 
@@ -223,12 +272,24 @@ def _read_miptex_lump(blob: bytes) -> list[MipTexture | None]:
         return []
     r = BinaryReader(io.BytesIO(blob))
     count = r.s32()
+    if count < 0:
+        raise ValueError(f"miptex count must be nonnegative, got {count}")
+    if count > (len(blob) - 4) // 4:
+        raise EOFError(
+            f"miptex offset table exceeds lump: count={count}, lump_size={len(blob)}"
+        )
     offsets = [r.s32() for _ in range(count)]
     out: list[MipTexture | None] = []
     for off in offsets:
-        if off < 0 or off >= len(blob):
+        if off == -1:
             out.append(None)
             continue
+        if off < 0:
+            raise ValueError(f"invalid miptex offset {off}")
+        if off + 40 > len(blob):
+            raise EOFError(
+                f"miptex header exceeds lump: offset={off}, lump_size={len(blob)}"
+            )
         sub = blob[off:]
         sr = BinaryReader(io.BytesIO(sub))
         name = sr.fixed_string(16)
@@ -237,9 +298,29 @@ def _read_miptex_lump(blob: bytes) -> list[MipTexture | None]:
         mip0_off = sr.u32()
         # Skip the other three mip offsets; we only need full resolution.
         _ = [sr.u32() for _ in range(3)]
-        if mip0_off + width * height > len(sub):
+        if width == 0 or height == 0:
+            raise ValueError(
+                f"miptex {name!r} dimensions must be positive, got {width}×{height}"
+            )
+        if width > MAX_TEXTURE_DIMENSION or height > MAX_TEXTURE_DIMENSION:
+            raise ValueError(
+                f"miptex {name!r} dimensions exceed {MAX_TEXTURE_DIMENSION}: "
+                f"{width}×{height}"
+            )
+        if width * height > MAX_TEXTURE_PIXELS:
+            raise ValueError(f"miptex {name!r} pixel count is too large")
+        if mip0_off == 0:
             out.append(None)
             continue
+        if mip0_off < 40:
+            raise ValueError(
+                f"miptex {name!r} mip offset {mip0_off} points inside its header"
+            )
+        if mip0_off + width * height > len(sub):
+            raise EOFError(
+                f"miptex {name!r} pixels exceed lump: offset={mip0_off}, "
+                f"size={width * height}, available={len(sub)}"
+            )
         pixels = sub[mip0_off:mip0_off + width * height]
         out.append(MipTexture(name=name, width=width, height=height, pixels=pixels))
     return out

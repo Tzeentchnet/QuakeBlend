@@ -35,3 +35,16 @@ WAD_TYPE_MIPTEX = 0x44
 
 # Default Q3 patch tessellation level (segments per Bezier span).
 DEFAULT_PATCH_LEVEL = 5
+MAX_PATCH_LEVEL = 16
+
+# Q3 tools traditionally cap patch control grids at 32 per side. Dimensions
+# must be odd, so 31 is the largest usable value.
+MAX_PATCH_DIMENSION = 31
+
+# Bound source MAP parsing before a malformed brush can grow without limit.
+MAX_BRUSH_FACES = 4096
+
+# Bound decoded indexed textures before dimensions are multiplied or pixel
+# buffers are read into memory.
+MAX_TEXTURE_DIMENSION = 4096
+MAX_TEXTURE_PIXELS = MAX_TEXTURE_DIMENSION * MAX_TEXTURE_DIMENSION

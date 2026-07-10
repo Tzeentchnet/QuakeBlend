@@ -150,3 +150,41 @@ def test_read_wad_raises_on_entry_offset_past_eof() -> None:
     data = b"WAD2" + struct.pack("<ii", 1, 12) + directory
     with pytest.raises(EOFError):
         wad.read_wad(io.BytesIO(data))
+
+
+def test_read_wad_rejects_negative_entry_count() -> None:
+    data = b"WAD2" + struct.pack("<ii", -1, 12)
+    with pytest.raises(ValueError, match="entry count"):
+        wad.read_wad(io.BytesIO(data))
+
+
+def test_read_wad_rejects_compressed_miptex() -> None:
+    data = bytearray(_build_wad2([("alpha", 16, 16)]))
+    directory_offset = struct.unpack_from("<i", data, 8)[0]
+    data[directory_offset + 13] = 1
+    with pytest.raises(ValueError, match="compressed WAD miptex"):
+        wad.read_wad(io.BytesIO(data))
+
+
+def test_read_wad_rejects_mip_outside_entry() -> None:
+    data = bytearray(_build_wad2([("alpha", 16, 16)]))
+    directory_offset = struct.unpack_from("<i", data, 8)[0]
+    entry_offset, entry_size = struct.unpack_from("<ii", data, directory_offset)
+    struct.pack_into("<I", data, entry_offset + 24, entry_size - 1)
+    with pytest.raises(EOFError, match="mip 0 exceeds miptex payload"):
+        wad.read_wad(io.BytesIO(data))
+
+
+def test_read_miptex_rejects_missing_primary_mip() -> None:
+    payload = (
+        b"missing".ljust(16, b"\x00")
+        + struct.pack("<II", 16, 16)
+        + struct.pack("<IIII", 0, 0, 0, 0)
+    )
+    with pytest.raises(ValueError, match="primary mip offset must be nonzero"):
+        wad.read_miptex(
+            io.BytesIO(payload),
+            base_offset=0,
+            payload_size=len(payload),
+            expect_palette=False,
+        )

@@ -139,3 +139,95 @@ def test_round_trips_vertex_and_meshvert_lumps() -> None:
         color=(10, 20, 30, 40),
     )]
     assert bsp.meshverts == [2]
+
+
+def _face(**overrides) -> bsp_q3.Face:
+    values = {
+        "texture": 0,
+        "effect": -1,
+        "type": bsp_q3.FACE_TYPE_MESH,
+        "vertex": 0,
+        "n_vertexes": 3,
+        "meshvert": 0,
+        "n_meshverts": 0,
+        "lm_index": -1,
+        "lm_start": (0, 0),
+        "lm_size": (0, 0),
+        "lm_origin": bsp_q3.Vec3(0.0, 0.0, 0.0),
+        "lm_vec0": bsp_q3.Vec3(0.0, 0.0, 0.0),
+        "lm_vec1": bsp_q3.Vec3(0.0, 0.0, 0.0),
+        "normal": bsp_q3.Vec3(0.0, 0.0, 1.0),
+        "size": (0, 0),
+    }
+    values.update(overrides)
+    return bsp_q3.Face(**values)
+
+
+def test_validate_rejects_meshvert_outside_face_vertex_range() -> None:
+    vertex = bsp_q3.Vertex(
+        pos=bsp_q3.Vec3(0.0, 0.0, 0.0),
+        tex_uv=(0.0, 0.0),
+        lm_uv=(0.0, 0.0),
+        normal=bsp_q3.Vec3(0.0, 0.0, 1.0),
+        color=(255, 255, 255, 255),
+    )
+    bsp = bsp_q3.Bsp(
+        textures=[bsp_q3.Texture("textures/test", 0, 0)],
+        vertices=[vertex, vertex, vertex],
+        meshverts=[3],
+        faces=[_face(n_meshverts=1)],
+    )
+    with pytest.raises(ValueError, match=r"meshvert 3 out of relative vertex range"):
+        bsp.validate()
+
+
+def test_validate_rejects_invalid_patch_grid() -> None:
+    vertex = bsp_q3.Vertex(
+        pos=bsp_q3.Vec3(0.0, 0.0, 0.0),
+        tex_uv=(0.0, 0.0),
+        lm_uv=(0.0, 0.0),
+        normal=bsp_q3.Vec3(0.0, 0.0, 1.0),
+        color=(255, 255, 255, 255),
+    )
+    bsp = bsp_q3.Bsp(
+        textures=[bsp_q3.Texture("textures/test", 0, 0)],
+        vertices=[vertex] * 12,
+        faces=[_face(
+            type=bsp_q3.FACE_TYPE_PATCH,
+            n_vertexes=12,
+            size=(4, 3),
+        )],
+    )
+    with pytest.raises(ValueError, match=r"invalid patch grid 4×3"):
+        bsp.validate()
+
+
+def test_validate_rejects_non_finite_vertex_uv() -> None:
+    vertex = bsp_q3.Vertex(
+        pos=bsp_q3.Vec3(0.0, 0.0, 0.0),
+        tex_uv=(float("nan"), 0.0),
+        lm_uv=(0.0, 0.0),
+        normal=bsp_q3.Vec3(0.0, 0.0, 1.0),
+        color=(255, 255, 255, 255),
+    )
+    bsp = bsp_q3.Bsp(vertices=[vertex])
+    with pytest.raises(ValueError, match=r"vertex 0 texture UV.*finite"):
+        bsp.validate()
+
+
+def test_validate_rejects_incomplete_triangle_indices() -> None:
+    vertex = bsp_q3.Vertex(
+        pos=bsp_q3.Vec3(0.0, 0.0, 0.0),
+        tex_uv=(0.0, 0.0),
+        lm_uv=(0.0, 0.0),
+        normal=bsp_q3.Vec3(0.0, 0.0, 1.0),
+        color=(255, 255, 255, 255),
+    )
+    bsp = bsp_q3.Bsp(
+        textures=[bsp_q3.Texture("textures/test", 0, 0)],
+        vertices=[vertex, vertex, vertex],
+        meshverts=[0, 1, 2, 0],
+        faces=[_face(n_meshverts=4)],
+    )
+    with pytest.raises(ValueError, match=r"meshvert count 4.*multiple of 3"):
+        bsp.validate()

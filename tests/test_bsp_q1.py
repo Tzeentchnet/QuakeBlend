@@ -81,6 +81,21 @@ def test_face_polygon_rejects_invalid_edge_index() -> None:
         bsp.face_polygon(face)
 
 
+def test_validate_rejects_edge_vertex_out_of_range() -> None:
+    bsp = bsp_q1.Bsp(
+        vertices=[bsp_q1.Vec3(0.0, 0.0, 0.0)],
+        edges=[bsp_q1.Edge(0, 2)],
+    )
+    with pytest.raises(ValueError, match=r"edge 0 vertex 2 out of range"):
+        bsp.validate()
+
+
+def test_validate_rejects_non_finite_vertex() -> None:
+    bsp = bsp_q1.Bsp(vertices=[bsp_q1.Vec3(float("nan"), 0.0, 0.0)])
+    with pytest.raises(ValueError, match=r"vertex 0.*finite"):
+        bsp.validate()
+
+
 def test_warns_on_trailing_lump_bytes() -> None:
     with pytest.warns(UserWarning, match=r"trailing bytes"):
         verts = bsp_q1._read_vertices(b"\x00" * 13)
@@ -160,3 +175,35 @@ def test_round_trips_vertex_and_edge_lumps() -> None:
     assert bsp.edges == [bsp_q1.Edge(0, 1)]
     assert bsp.ledges == [0]
     assert bsp.face_polygon(bsp.faces[0]) == [0]
+
+
+def test_miptex_rejects_negative_count() -> None:
+    with pytest.raises(ValueError, match="miptex count"):
+        bsp_q1._read_miptex_lump(struct.pack("<i", -1))
+
+
+def test_miptex_rejects_truncated_offset_table() -> None:
+    with pytest.raises(EOFError, match="offset table exceeds lump"):
+        bsp_q1._read_miptex_lump(struct.pack("<ii", 2, -1))
+
+
+def test_miptex_rejects_zero_dimensions() -> None:
+    header = (
+        b"broken".ljust(16, b"\x00")
+        + struct.pack("<II", 0, 16)
+        + struct.pack("<IIII", 40, 40, 40, 40)
+    )
+    blob = struct.pack("<ii", 1, 8) + header
+    with pytest.raises(ValueError, match="dimensions must be positive"):
+        bsp_q1._read_miptex_lump(blob)
+
+
+def test_miptex_rejects_pixels_outside_lump() -> None:
+    header = (
+        b"broken".ljust(16, b"\x00")
+        + struct.pack("<II", 16, 16)
+        + struct.pack("<IIII", 40, 40, 40, 40)
+    )
+    blob = struct.pack("<ii", 1, 8) + header
+    with pytest.raises(EOFError, match="pixels exceed lump"):
+        bsp_q1._read_miptex_lump(blob)

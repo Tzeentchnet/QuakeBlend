@@ -6,19 +6,8 @@ import math
 
 import bpy
 
-from ..formats.entities import parse_origin
+from ..formats.entities import parse_color, parse_origin
 from ..utils import log as qb_log
-
-
-def _to_blender_color(value: str) -> tuple[float, float, float]:
-    parts = value.split()
-    if len(parts) >= 3:
-        try:
-            return (float(parts[0]) / 255.0, float(parts[1]) / 255.0,
-                    float(parts[2]) / 255.0)
-        except ValueError:
-            pass
-    return (1.0, 1.0, 1.0)
 
 
 def _entity_label(entity: dict[str, str], classname: str) -> str:
@@ -57,7 +46,10 @@ def build_entity(entity: dict[str, str], collection: bpy.types.Collection,
             energy = 300.0
         light_data.energy = energy
         if "_color" in entity:
-            light_data.color = _to_blender_color(entity["_color"])
+            try:
+                light_data.color = parse_color(entity["_color"])
+            except ValueError:
+                light_data.color = (1.0, 1.0, 1.0)
         obj = bpy.data.objects.new(classname, light_data)
     elif classname in ("info_player_start", "info_player_deathmatch",
                        "info_player_coop", "info_intermission"):

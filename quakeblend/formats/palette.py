@@ -32,14 +32,21 @@ def from_bytes(data: bytes, fullbright: Iterable[int] = Q1_FULLBRIGHT_RANGE) -> 
     return Palette(rgb=bytes(data), fullbright_indices=frozenset(fullbright))
 
 
+def _data_package_name() -> str:
+    if not __package__ or "." not in __package__:
+        raise RuntimeError("palette module has no package context")
+    return f"{__package__.rsplit('.', 1)[0]}.data"
+
+
 def load_bundled(game: str) -> Palette:
     """Return the palette for ``"q1"`` or ``"q2"``."""
     game = game.lower()
+    data_package = resources.files(_data_package_name())
     if game == "q1":
-        data = resources.files("quakeblend.data").joinpath("palette_q1.lmp").read_bytes()
+        data = data_package.joinpath("palette_q1.lmp").read_bytes()
         return from_bytes(data, Q1_FULLBRIGHT_RANGE)
     if game == "q2":
-        data = resources.files("quakeblend.data").joinpath("palette_q2.lmp").read_bytes()
+        data = data_package.joinpath("palette_q2.lmp").read_bytes()
         return from_bytes(data, Q2_FULLBRIGHT_RANGE)
     raise ValueError(f"unknown game {game!r}; expected 'q1' or 'q2'")
 

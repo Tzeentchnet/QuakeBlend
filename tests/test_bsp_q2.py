@@ -72,6 +72,26 @@ def test_face_polygon_rejects_invalid_edge_index() -> None:
         bsp.face_polygon(face)
 
 
+def test_validate_rejects_face_texinfo_out_of_range() -> None:
+    bsp = bsp_q2.Bsp(faces=[bsp_q2.Face(
+        plane_id=0,
+        side=0,
+        first_edge=0,
+        num_edges=0,
+        texinfo_id=0,
+        styles=b"\x00" * 4,
+        lightmap_offset=-1,
+    )])
+    with pytest.raises(ValueError, match=r"face 0 texinfo 0 out of range"):
+        bsp.validate()
+
+
+def test_validate_rejects_non_finite_vertex() -> None:
+    bsp = bsp_q2.Bsp(vertices=[bsp_q2.Vec3(float("inf"), 0.0, 0.0)])
+    with pytest.raises(ValueError, match=r"vertex 0.*finite"):
+        bsp.validate()
+
+
 def test_warns_on_trailing_lump_bytes() -> None:
     with pytest.warns(UserWarning, match=r"trailing bytes"):
         surfedges = bsp_q2._read_surfedges(b"\x00" * 5)

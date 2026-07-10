@@ -57,16 +57,28 @@ def test_read_wal_raises_on_truncated_mip_pixels() -> None:
         wal.read_wal(io.BytesIO(data))
 
 
-def test_read_wal_allows_zero_dimensions() -> None:
+def test_read_wal_rejects_zero_dimensions() -> None:
     data = _build_wal("textures/base/zero", 0, 0)
-    parsed = wal.read_wal(io.BytesIO(data))
-    assert parsed.width == 0
-    assert parsed.height == 0
-    assert tuple(len(mip) for mip in parsed.mip_pixels) == (1, 1, 1, 1)
+    with pytest.raises(ValueError, match="dimensions must be positive"):
+        wal.read_wal(io.BytesIO(data))
 
 
 def test_read_wal_raises_on_offset_past_eof() -> None:
     data = bytearray(_build_wal("textures/base/floor", 16, 16))
     struct.pack_into("<I", data, 40, len(data) + 64)
     with pytest.raises(EOFError):
+        wal.read_wal(io.BytesIO(data))
+
+
+def test_read_wal_rejects_mip_offset_inside_header() -> None:
+    data = bytearray(_build_wal("textures/base/floor", 16, 16))
+    struct.pack_into("<I", data, 40, 4)
+    with pytest.raises(ValueError, match="inside the header"):
+        wal.read_wal(io.BytesIO(data))
+
+
+def test_read_wal_rejects_oversized_dimensions() -> None:
+    data = bytearray(_build_wal("textures/base/floor", 16, 16))
+    struct.pack_into("<I", data, 32, 4097)
+    with pytest.raises(ValueError, match="dimensions exceed"):
         wal.read_wal(io.BytesIO(data))

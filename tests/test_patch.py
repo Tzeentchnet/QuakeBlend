@@ -22,10 +22,20 @@ def _flat_3x3(z: float = 0.0) -> patch_mod.Patch:
     return patch_mod.Patch(width=3, height=3, controls=controls)
 
 
+def _flat_5x3() -> patch_mod.Patch:
+    controls = []
+    for j in range(3):
+        for i in range(5):
+            controls.append(patch_mod.Control(
+                Vec3(float(i), float(j), 0.0),
+                (i / 4.0, j / 2.0),
+            ))
+    return patch_mod.Patch(width=5, height=3, controls=controls)
+
+
 def test_flat_patch_vertex_count_and_corners() -> None:
     level = 5
     tess = patch_mod.tessellate(_flat_3x3(), level=level)
-    expected = (2 * level + 1) ** 2 // 1  # one subpatch
     # Single 3×3 subpatch → (level+1)² = 36 verts.
     assert len(tess.vertices) == (level + 1) ** 2
     # Corner vertices should match the four corner controls.
@@ -92,17 +102,30 @@ def test_tessellate_minimum_valid_patch() -> None:
     assert tess.quads == [(0, 1, 3, 2)]
 
 
-def test_parse_patch_def2_zero_sized_grid() -> None:
-    name, p = patch_mod.parse_patch_def2_block(
-        """
-        common/clip
-        ( 0 0 0 0 0 )
-        (
-        )
-        """
+def test_tessellate_stitches_adjacent_subpatch_boundaries() -> None:
+    tess = patch_mod.tessellate(_flat_5x3(), level=2)
+    assert len(tess.vertices) == 5 * 3
+    assert len(tess.quads) == 2 * 2 * 2
+
+
+@pytest.mark.parametrize("width,height", [(0, 0), (-3, 3), (4, 3), (33, 3)])
+def test_parse_patch_def2_rejects_invalid_dimensions(width: int, height: int) -> None:
+    payload = f"""
+    common/clip
+    ( {width} {height} 0 0 0 )
+    (
     )
-    assert name == "common/clip"
-    assert p.width == 0 and p.height == 0
-    assert p.controls == []
-    with pytest.raises(ValueError):
-        patch_mod.tessellate(p)
+    """
+    with pytest.raises(ValueError, match="patch grid"):
+        patch_mod.parse_patch_def2_block(payload)
+
+
+def test_tessellate_rejects_mismatched_control_count() -> None:
+    patch = patch_mod.Patch(width=3, height=3, controls=[])
+    with pytest.raises(ValueError, match="control count"):
+        patch_mod.tessellate(patch)
+
+
+def test_tessellate_rejects_excessive_level() -> None:
+    with pytest.raises(ValueError, match="level must not exceed 16"):
+        patch_mod.tessellate(_flat_3x3(), level=17)
