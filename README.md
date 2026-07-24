@@ -17,12 +17,20 @@ Repository: <https://github.com/Tzeentchnet/QuakeBlend>
   Quake 2 `.wal` textures (sky, fullbright, and transparency surface flags
   honored; warp/flowing flags are parsed but not animated), and Quake 3
   `.tga`/`.jpg`/`.png` images — resolved from a
-  configurable *Texture Root* folder or add-on preference. Q2 `contents
-  flags value` MAP trailing fields are parsed and propagated best-effort.
-* **Entity import** as native Blender objects: point lights (energy/color
-  from the `light`/`_color` keys), cameras for player starts, and empties
-  for everything else, with every key/value pair preserved as a custom
-  property.
+  configurable *Texture Root* folder or add-on preference. Texture names are
+  matched case-insensitively, so `.map` face names need not match the casing
+  used inside a WAD. Q2 `contents flags value` MAP trailing fields are parsed,
+  re-exported verbatim, and exposed on each brush object as the
+  `qb_face_contents` / `qb_face_flags` / `qb_face_value` custom properties
+  (material appearance itself comes from the `.wal` surface flags).
+* **Entity import** as native Blender objects: point lights (`light`/`_light`
+  intensity converted to watts for the chosen world scale, colour from
+  `_color`), cameras for player starts, and empties for everything else, with
+  every key/value pair preserved as a `qb_prop_<key>` custom property.
+* **BSP submodels split per entity** — the models lump is honored, so
+  `func_door`, `func_plat`, and trigger brushes arrive as their own objects
+  (tagged `qb_bsp_model_index` and the owning entity's `qb_prop_<key>` values)
+  instead of being welded into the world mesh.
 * **MAP export with cross-game conversion** (Q1 ↔ Q2 ↔ Q3): re-parses the
   original source file, adds/strips trailing `contents flags value` fields,
   converts `brushDef3` faces to Standard faces, tessellates or drops
@@ -62,9 +70,13 @@ After installing, three import operators appear under *File → Import*:
 * **Quake MAP (.map)** — import any Q1/Q2/Q3 `.map` text file. Operator
   options:
   * *Scale* — world-unit scale (default `1/32`).
-  * *Source game* — `Auto` detects Q2/Q3-specific syntax, or choose Q1/Q2/Q3
-    explicitly for ambiguous files. Standard vs Valve220 projection is always
-    detected per face.
+  * *Source game* — `Auto` detects Q2/Q3-specific syntax (Q2 face trailers,
+    Q3 `brushDef3`/`patchDef2`, or path-like Q3 shader names), or choose
+    Q1/Q2/Q3 explicitly for ambiguous files. Standard vs Valve220 projection
+    is always detected per face; the root collection records a per-file
+    summary in `qb_source_projection` (`standard`, `valve220`, or `mixed`).
+    Under `Auto` both `.wal` and image textures are probed; an explicit
+    override pins the on-disk texture flavour.
   * *Texture root* — folder indexed recursively once per import for external
     textures. Quake 2 `.wal` and Quake 3 image textures (`.tga` / `.jpg` /
     `.jpeg` / `.png`) are matched case-insensitively by face-texture name.
@@ -72,6 +84,10 @@ After installing, three import operators appear under *File → Import*:
   * *WAD files* — semicolon-separated list of Quake 1 `.wad` files.
   * *Import entities* / *Import lights* — toggle non-brush entities and
     `light*` classnames respectively.
+  * *Light energy multiplier* — scales the converted wattage. Quake `light`
+    values are intensities in Quake-unit space, so they are converted with
+    `watts = light × 4π × scale²` (a default 300-unit light lands near 3.7 W
+    at the 1/32 scale); raise or lower this to taste.
   * *Patch tessellation level* — Q3 `patchDef2` subdivision (1–16, default
     `5`). `brushDef3` brushes are converted to mesh geometry automatically
     (texture matrix decomposed to Standard UV parameters).
@@ -79,8 +95,15 @@ After installing, three import operators appear under *File → Import*:
   stored in `obj["qb_patch_control_grid"]` for future round-trip.
 * **Quake BSP (.bsp)** — auto-detects Q1 (v29), Q2 (IBSP v38), Q3 (IBSP v46).
   For Q2/Q3 supply a *Texture Root* folder containing the `.wal` or
-  `.tga` / `.jpg` / `.png` texture files.
+  `.tga` / `.jpg` / `.png` texture files. Shares the *Scale*, *Import
+  entities*, *Import lights*, *Light energy multiplier*, and *Patch
+  tessellation level* options with the MAP importer. Each BSP submodel
+  becomes its own object, named after the entity that references it.
 * **Quake WAD (.wad)** — load a WAD2/WAD3 archive as a set of materials.
+
+Re-importing the same file adds a second root collection (`e1m1.001`) rather
+than replacing the first; materials and images are reused rather than
+duplicated.
 
 If an import fails, QuakeBlend removes collections, objects, meshes, materials,
 images, lights, and cameras created by that operation. Existing Blender data is
@@ -146,9 +169,9 @@ both geometry and materials in the Blender viewport.
 | Test | Sample | What to check |
 |---|---|---|
 | Q1 MAP | `e1m1.map` (id1) | Brushes solid, faces UV-aligned, lights placed |
-| Q1 BSP | `start.bsp` | World mesh visible, entities/lights as objects |
+| Q1 BSP | `start.bsp` | World mesh visible, submodels split out, entities/lights as objects |
 | Q1 WAD | `quake.wad` (id1) | All textures appear as materials |
-| Q2 MAP | `base1.map` | Same brush rendering, surface flags propagate |
+| Q2 MAP | `base1.map` | Same brush rendering, `qb_face_flags` present on brushes |
 | Q2 BSP | `base1.bsp` | WAL textures load, fullbright / sky materials emit |
 | Q3 MAP | `q3dm1.map` | `patchDef2` patches tessellated, `brushDef3` brushes render as geometry |
 | Q3 BSP | `q3dm1.bsp` | Triangle soup + patches + meshverts all draw |
@@ -185,7 +208,7 @@ $zip = (Get-ChildItem ./dist/quakeblend-*.zip |
 A successful run ends with:
 
 ```text
-QUAKEBLEND_SMOKE_OK registration materials transaction map bsp wad export unregister
+QUAKEBLEND_SMOKE_OK registration materials transaction map textures bsp submodels wad export unregister
 ```
 
 The manual viewport checks listed above still cover visual rendering quality.

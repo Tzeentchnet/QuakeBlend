@@ -12,6 +12,7 @@ from ..formats.brushdef3 import base_axes_for_normal
 from ..formats.common import Vec3
 from ..formats.csg import BrushFace
 from ..formats.map_q1 import MapBrush, TexInfo as MapTexInfo
+from . import builder_materials
 
 
 # --------------------------------------------------------------- mesh helpers
@@ -24,22 +25,12 @@ def _new_mesh_object(name: str, collection: bpy.types.Collection) -> bpy.types.O
     return obj
 
 
-def _ensure_collection(scene: bpy.types.Scene, name: str,
-                       parent: bpy.types.Collection | None = None) -> bpy.types.Collection:
-    coll = bpy.data.collections.get(name)
-    if coll is not None:
-        return coll
-    coll = bpy.data.collections.new(name)
-    (parent or scene.collection).children.link(coll)
-    return coll
-
-
 # --------------------------------------------------------------- map brushes
 
 
 def build_map_brush(brush: MapBrush, faces: Sequence[BrushFace], name: str,
                     collection: bpy.types.Collection,
-                    materials: dict[str, bpy.types.Material],
+                    materials: builder_materials.MaterialCache,
                     *, scale: float) -> bpy.types.Object | None:
     """Build a Blender object for one CSG brush.
 
@@ -62,7 +53,6 @@ def build_map_brush(brush: MapBrush, faces: Sequence[BrushFace], name: str,
             if mat is not None:
                 obj.data.materials.append(mat)
             else:
-                from . import builder_materials
                 obj.data.materials.append(
                     builder_materials.get_or_create_placeholder_material(
                         face.texture,

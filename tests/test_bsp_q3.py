@@ -50,6 +50,24 @@ def test_q3_rejects_q2_signature() -> None:
         bsp_q3.read(io.BytesIO(blob))
 
 
+def test_decodes_models_lump() -> None:
+    # model_t: mins[3] maxs[3] face first/count, brush first/count
+    model_blob = struct.pack(
+        "<6f4i",
+        -64.0, -64.0, 0.0,
+        64.0, 64.0, 128.0,
+        11, 4,
+        0, 1,
+    )
+    bsp = bsp_q3.read(io.BytesIO(_make_bsp({bsp_q3.LUMP_MODELS: model_blob})))
+    assert bsp.models == [bsp_q3.Model(
+        mins=bsp_q3.Vec3(-64.0, -64.0, 0.0),
+        maxs=bsp_q3.Vec3(64.0, 64.0, 128.0),
+        first_face=11,
+        face_count=4,
+    )]
+
+
 def test_warns_on_trailing_lump_bytes() -> None:
     with pytest.warns(UserWarning, match=r"trailing bytes"):
         meshverts = bsp_q3._read_meshverts(b"\x00" * 5)

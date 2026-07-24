@@ -99,6 +99,15 @@ class Face:
     size: tuple[int, int]
 
 
+@dataclass(frozen=True)
+class Model:
+    """One BSP submodel: model 0 is the world, 1..N are brush entities."""
+    mins: Vec3
+    maxs: Vec3
+    first_face: int
+    face_count: int
+
+
 @dataclass
 class Bsp:
     version: int = BSP_VERSION_Q3
@@ -108,6 +117,7 @@ class Bsp:
     vertices: List[Vertex] = field(default_factory=list)
     meshverts: List[int] = field(default_factory=list)
     faces: List[Face] = field(default_factory=list)
+    models: List[Model] = field(default_factory=list)
     lightmaps: List[bytes] = field(default_factory=list)
 
     def validate(self) -> None:
@@ -193,6 +203,18 @@ class Bsp:
                 raise ValueError(
                     f"corrupt BSP: face {face_index} lightmap {face.lm_index} "
                     f"out of range (lightmap_count={len(self.lightmaps)})"
+                )
+        for model_index, model in enumerate(self.models):
+            if model.face_count < 0:
+                raise ValueError(
+                    f"corrupt BSP: model {model_index} has negative face count"
+                )
+            if (model.first_face < 0
+                    or model.first_face + model.face_count > len(self.faces)):
+                raise ValueError(
+                    f"corrupt BSP: model {model_index} face range "
+                    f"[{model.first_face}, {model.first_face + model.face_count}) "
+                    f"out of range (face_count={len(self.faces)})"
                 )
 
 
@@ -297,6 +319,23 @@ def _read_faces(blob: bytes) -> list[Face]:
     return out
 
 
+def _read_models(blob: bytes) -> list[Model]:
+    """Read ``model_t`` records (mins/maxs + face range + brush range)."""
+    SIZE = 40
+    _warn_trailing_bytes(blob, SIZE)
+    n = len(blob) // SIZE
+    out: list[Model] = []
+    for i in range(n):
+        values = struct.unpack_from("<6f4i", blob, i * SIZE)
+        out.append(Model(
+            mins=Vec3(values[0], values[1], values[2]),
+            maxs=Vec3(values[3], values[4], values[5]),
+            first_face=values[6],
+            face_count=values[7],
+        ))
+    return out
+
+
 def _read_lightmaps(blob: bytes) -> list[bytes]:
     SIZE = LIGHTMAP_DIM * LIGHTMAP_DIM * 3
     _warn_trailing_bytes(blob, SIZE)
@@ -325,6 +364,7 @@ def read(stream: BinaryIO) -> Bsp:
     bsp.vertices = _read_vertices(_slice(data, lumps[LUMP_VERTEXES]))
     bsp.meshverts = _read_meshverts(_slice(data, lumps[LUMP_MESHVERTS]))
     bsp.faces = _read_faces(_slice(data, lumps[LUMP_FACES]))
+    bsp.models = _read_models(_slice(data, lumps[LUMP_MODELS]))
     bsp.lightmaps = _read_lightmaps(_slice(data, lumps[LUMP_LIGHTMAPS]))
     return bsp
 

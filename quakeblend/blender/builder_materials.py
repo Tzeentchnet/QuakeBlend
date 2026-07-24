@@ -95,6 +95,38 @@ def load_external_image(name: str, path: Path, *, asset_key: str) -> bpy.types.I
 # ------------------------------------------------------------------ materials
 
 
+class MaterialCache:
+    """Case-insensitive ``texture name -> material`` map.
+
+    Quake face names and WAD/miptex names routinely disagree in case
+    (``CITY4_7`` in the ``.map`` vs ``city4_7`` in the ``.wad``) and in
+    separator style, so every lookup normalises both.
+    """
+
+    def __init__(self) -> None:
+        self._by_key: dict[str, bpy.types.Material] = {}
+
+    @staticmethod
+    def _key(name: str) -> str:
+        return name.strip().replace("\\", "/").casefold()
+
+    def get(self, name: str) -> bpy.types.Material | None:
+        return self._by_key.get(self._key(name))
+
+    def add(self, name: str, material: bpy.types.Material) -> None:
+        self._by_key[self._key(name)] = material
+
+    def setdefault(self, name: str,
+                   material: bpy.types.Material) -> bpy.types.Material:
+        return self._by_key.setdefault(self._key(name), material)
+
+    def __contains__(self, name: str) -> bool:
+        return self._key(name) in self._by_key
+
+    def __len__(self) -> int:
+        return len(self._by_key)
+
+
 @dataclass(frozen=True)
 class MaterialFlags:
     sky: bool = False

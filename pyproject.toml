@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "quakeblend"
-version = "1.1.0"
+version = "1.2.0"
 description = "Blender 5.0+ extension for importing Quake 1/2/3 maps and textures (development tooling only)"
 requires-python = ">=3.11"
 

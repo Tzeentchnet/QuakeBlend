@@ -56,6 +56,23 @@ textures/smoke/patch
 """
 
 
+# Every face carries the Quake 2 `contents flags value` trailer; only the first
+# face uses non-zero values so both branches of the tagger are exercised.
+_Q2_MAP = """
+{
+"classname" "worldspawn"
+{
+( -64 -64 -16 ) ( -64 -63 -16 ) ( -64 -64 -15 ) e1u1/metal1 0 0 0 1 1 1 4 100
+( -64 -64 -16 ) ( -64 -64 -15 ) ( -63 -64 -16 ) e1u1/metal1 0 0 0 1 1 0 0 0
+( -64 -64 -16 ) ( -63 -64 -16 ) ( -64 -63 -16 ) e1u1/metal1 0 0 0 1 1 0 0 0
+( 64 64 16 ) ( 64 64 17 ) ( 64 65 16 ) e1u1/metal1 0 0 0 1 1 0 0 0
+( 64 64 16 ) ( 65 64 16 ) ( 64 64 17 ) e1u1/metal1 0 0 0 1 1 0 0 0
+( 64 64 16 ) ( 64 65 16 ) ( 65 64 16 ) e1u1/metal1 0 0 0 1 1 0 0 0
+}
+}
+"""
+
+
 def _arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -158,6 +175,16 @@ def _check_materials(extension_root: str) -> None:
         output.inputs["Surface"].links[0].from_node.as_pointer()
         == principled.as_pointer()
     )
+
+    # MaterialCache must fold case and separators so `.map` face names need not
+    # match the casing stored inside a WAD.
+    cache = materials.MaterialCache()
+    cache.add("Smoke\\Wall1", first_material)
+    assert cache.get("smoke/WALL1") is first_material
+    assert "  SMOKE/wall1  " in cache
+    assert cache.setdefault("smoke/wall1", second_material) is first_material
+    assert cache.get("smoke/wall2") is None
+    assert len(cache) == 1
 
 
 def _check_transaction(extension_root: str) -> None:
@@ -331,8 +358,71 @@ def _write_empty_bsp(path: Path, *, version: int, lump_count: int,
     )
 
 
-def _write_wad(path: Path) -> None:
-    texture_name = b"QB_WAD_SMOKE".ljust(16, b"\x00")
+def _write_q1_submodel_bsp(path: Path) -> None:
+    """A v29 BSP with two quads split across model 0 (world) and model 1."""
+    entities = (
+        b'{ "classname" "worldspawn" }\n'
+        b'{ "classname" "func_door" "model" "*1" "targetname" "smoke_door" }\n'
+        b"\x00"
+    )
+    vertices = b"".join(
+        struct.pack("<3f", x, y, z)
+        for x, y, z in (
+            (0, 0, 0), (64, 0, 0), (64, 64, 0), (0, 64, 0),
+            (0, 0, 64), (64, 0, 64), (64, 64, 64), (0, 64, 64),
+        )
+    )
+    # Edge 0 is unused by convention: signed ledge indices cannot encode -0.
+    edge_pairs = [
+        (0, 0),
+        (0, 1), (1, 2), (2, 3), (3, 0),
+        (4, 5), (5, 6), (6, 7), (7, 4),
+    ]
+    edges = b"".join(struct.pack("<HH", a, b) for a, b in edge_pairs)
+    ledges = b"".join(struct.pack("<i", i) for i in range(1, 9))
+    texinfo = struct.pack(
+        "<8fII",
+        1.0, 0.0, 0.0, 0.0,
+        0.0, 1.0, 0.0, 0.0,
+        0xFFFFFFFF, 0,           # no miptex: keeps the miptex lump empty
+    )
+    faces = b"".join(
+        struct.pack("<HHiHHBBBBi", 0, 0, ledge_id, 4, 0, 0, 0, 0, 0, -1)
+        for ledge_id in (0, 4)
+    )
+    models = b"".join(
+        struct.pack(
+            "<9f7i",
+            0.0, 0.0, 0.0, 64.0, 64.0, 64.0, 0.0, 0.0, 0.0,
+            0, 0, 0, 0, 0,
+            first_face, 1,
+        )
+        for first_face in (0, 1)
+    )
+
+    lumps = {
+        0: entities,
+        3: vertices,
+        6: texinfo,
+        7: faces,
+        12: edges,
+        13: ledges,
+        14: models,
+    }
+    header_size = 4 + 15 * 8
+    cursor = header_size
+    header = [struct.pack("<i", 29)]
+    for index in range(15):
+        blob = lumps.get(index, b"")
+        header.append(struct.pack("<ii", cursor if blob else header_size, len(blob)))
+        cursor += len(blob)
+    path.write_bytes(
+        b"".join(header) + b"".join(lumps.get(i, b"") for i in range(15))
+    )
+
+
+def _write_wad(path: Path, texture: str = "QB_WAD_SMOKE") -> None:
+    texture_name = texture.encode("ascii").ljust(16, b"\x00")
     payload = (
         texture_name
         + struct.pack("<II", 1, 1)
@@ -349,6 +439,89 @@ def _write_wad(path: Path) -> None:
     path.write_bytes(
         b"WAD2" + struct.pack("<ii", 1, directory_offset) + payload + directory
     )
+
+
+def _check_texture_case_and_face_flags(directory: Path) -> None:
+    """WAD lookups must fold case, and Q2 face trailers must reach Blender."""
+    wad_path = directory / "smoke_lowercase.wad"
+    _write_wad(wad_path, texture="smoke")          # map face says "SMOKE"
+    map_path = directory / "smoke_case.map"
+    map_path.write_text(_Q1_MAP, encoding="ascii")
+    result = bpy.ops.quakeblend.import_map(
+        filepath=str(map_path),
+        scale=0.125,
+        source_game="Q1",
+        texture_root=str(directory),
+        wad_paths=str(wad_path),
+        import_entities=False,
+        import_lights=False,
+        patch_level=2,
+    )
+    assert result == {"FINISHED"}
+    root = _source_roots(map_path)[0]
+    brushes = [
+        obj for obj in _objects_below(root)
+        if obj.type == "MESH" and obj.data.materials
+    ]
+    assert brushes, "case-insensitive WAD import produced no textured brushes"
+    for obj in brushes:
+        for material in obj.data.materials:
+            assert "qb_placeholder" not in material, (
+                f"'{material.name}' fell back to a placeholder despite a WAD match"
+            )
+
+    q2_path = directory / "smoke_q2.map"
+    q2_path.write_text(_Q2_MAP, encoding="ascii")
+    result = bpy.ops.quakeblend.import_map(
+        filepath=str(q2_path),
+        scale=0.125,
+        source_game="Q2",
+        texture_root=str(directory),
+        wad_paths=";",
+        import_entities=False,
+        import_lights=False,
+        patch_level=2,
+    )
+    assert result == {"FINISHED"}
+    q2_root = _source_roots(q2_path)[0]
+    flagged = [obj for obj in _objects_below(q2_root) if "qb_face_flags" in obj]
+    assert len(flagged) == 1
+    brush = flagged[0]
+    assert list(brush["qb_face_contents"]) == [1, 0, 0, 0, 0, 0]
+    assert list(brush["qb_face_flags"]) == [4, 0, 0, 0, 0, 0]
+    assert list(brush["qb_face_value"]) == [100, 0, 0, 0, 0, 0]
+    assert brush["qb_face_textures"].split("\n") == ["e1u1/metal1"] * 6
+
+
+def _check_bsp_submodels(directory: Path) -> None:
+    """The models lump must yield one object per submodel, not one world mesh."""
+    path = directory / "smoke_bsp_submodels.bsp"
+    _write_q1_submodel_bsp(path)
+    result = bpy.ops.quakeblend.import_bsp(
+        filepath=str(path),
+        scale=0.03125,
+        texture_root=str(directory),
+        import_entities=True,
+        import_lights=True,
+        light_energy=1.0,
+        patch_level=2,
+    )
+    assert result == {"FINISHED"}
+    root = next(
+        collection for collection in bpy.data.collections
+        if collection.name == path.stem
+    )
+    meshes = [
+        obj for obj in _objects_below(root)
+        if obj.type == "MESH" and "qb_bsp_model_index" in obj
+    ]
+    by_model = {int(obj["qb_bsp_model_index"]): obj for obj in meshes}
+    assert set(by_model) == {0, 1}
+    # Compacting must drop the other submodel's vertices from each mesh.
+    assert len(by_model[0].data.vertices) == 4
+    assert len(by_model[1].data.vertices) == 4
+    assert by_model[1]["qb_prop_targetname"] == "smoke_door"
+    assert by_model[1].name.startswith(f"{path.stem}_func_door")
 
 
 def _check_bsp_and_wad_workflows(directory: Path) -> None:
@@ -414,11 +587,13 @@ def main() -> None:
     with tempfile.TemporaryDirectory(prefix="quakeblend-smoke-") as temp_dir:
         directory = Path(temp_dir)
         _check_map_workflows(args.extension_root, directory)
+        _check_texture_case_and_face_flags(directory)
         _check_bsp_and_wad_workflows(directory)
+        _check_bsp_submodels(directory)
     _check_unregister(args.extension_root)
     print(
         "QUAKEBLEND_SMOKE_OK registration materials transaction "
-        "map bsp wad export unregister"
+        "map textures bsp submodels wad export unregister"
     )
 
 

@@ -65,6 +65,13 @@ def test_valve220_detection() -> None:
     assert brush.faces[0].tex.s_axis is not None
 
 
+def test_detect_game_reports_q3_for_path_like_texture_names() -> None:
+    # A legacy-brush Q3 map: no brushDef3, no patches, no Q2 trailing fields --
+    # only the shader path in the texture name distinguishes it from Q1.
+    mf = map_q1.parse(CUBE_MAP.replace("BRICK1", "textures/base_wall/concrete"))
+    assert map_q1.detect_game(mf) == "q3"
+
+
 Q3_PATCH_MAP = """
 {
 "classname" "worldspawn"

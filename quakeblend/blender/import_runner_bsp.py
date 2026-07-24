@@ -1,13 +1,15 @@
-"""Runner for the BSP import operator (Q1 v29 implemented in this phase)."""
+"""Runner for the BSP import operator (Q1 v29, Q2 IBSP38, Q3 IBSP46)."""
 
 from __future__ import annotations
 
 import struct
 from pathlib import Path
+from typing import Sequence
 
 import bpy
 
 from ..formats import bsp_q1, bsp_q2, bsp_q3, palette as palette_mod, patch as patch_mod, wal as wal_mod
+from ..formats.common import Vec3
 from ..utils.constants import BSP_VERSION_Q1, BSP_VERSION_Q2, BSP_VERSION_Q3, IBSP_MAGIC
 from ..utils import log as qb_log, paths as qb_paths
 from . import builder_entities, builder_geometry, builder_materials
@@ -26,12 +28,130 @@ def _resolve_texture_root(operator: bpy.types.Operator,
     return Path(raw) if raw else None
 
 
+def _entities_by_model(entities: list[dict[str, str]]) -> dict[int, dict[str, str]]:
+    """Map submodel index to the brush entity owning it (``"model": "*3"``)."""
+    out: dict[int, dict[str, str]] = {}
+    for entity in entities:
+        model = str(entity.get("model", ""))
+        if not model.startswith("*"):
+            continue
+        try:
+            index = int(model[1:])
+        except ValueError:
+            continue
+        out.setdefault(index, entity)
+    return out
+
+
+def _flip_v(uv: tuple[float, float]) -> tuple[float, float]:
+    """Convert a top-down texture UV to Blender's bottom-up convention."""
+    return uv[0], 1.0 - uv[1]
+
+
+def _compact_polygons(vertices: Sequence[Vec3],
+                      polygons: Sequence[Sequence[int]],
+                      ) -> tuple[list[Vec3], list[list[int]]]:
+    """Drop vertices unused by *polygons* and remap the polygon indices.
+
+    Submodels index into the shared BSP vertex buffer, so a per-model mesh
+    would otherwise carry every vertex in the map as loose geometry.
+    """
+    remap: dict[int, int] = {}
+    out_polys = [[remap.setdefault(i, len(remap)) for i in poly] for poly in polygons]
+    out_verts: list[Vec3] = [Vec3(0.0, 0.0, 0.0)] * len(remap)
+    for old, new in remap.items():
+        out_verts[new] = vertices[old]
+    return out_verts, out_polys
+
+
+def _model_of_face(models: Sequence, face_count: int) -> list[int]:
+    """Return a per-face lookup of the submodel that owns it."""
+    out = [0] * face_count
+    for model_index, model in enumerate(models):
+        stop = min(model.first_face + model.face_count, face_count)
+        for face_index in range(max(model.first_face, 0), stop):
+            out[face_index] = model_index
+    return out
+
+
+def _build_submodel_objects(entities: list[dict[str, str]],
+                            models: Sequence,
+                            face_records: Sequence[tuple],
+                            vertices: Sequence[Vec3],
+                            material_list: Sequence[bpy.types.Material],
+                            collection: bpy.types.Collection,
+                            stem: str,
+                            *, face_count: int, scale: float) -> None:
+    """Build one mesh object per BSP submodel; model 0 is the world.
+
+    ``face_records`` are ``(face_index, polygon, material_slot, uvs)`` tuples.
+    Splitting on the models lump keeps brush entities (doors, platforms,
+    triggers) selectable instead of welding them into the world mesh.
+    """
+    owner_of_model = _entities_by_model(entities)
+    model_of_face = _model_of_face(models, face_count)
+    grouped: dict[int, list[tuple]] = {}
+    for record in face_records:
+        grouped.setdefault(model_of_face[record[0]], []).append(record)
+
+    for model_index in sorted(grouped):
+        selected = grouped[model_index]
+        model_verts, model_polys = _compact_polygons(
+            vertices, [record[1] for record in selected]
+        )
+        owner = owner_of_model.get(model_index)
+        if model_index == 0:
+            name = stem
+        elif owner is not None:
+            name = f"{stem}_{owner.get('classname', 'model')}_{model_index}"
+        else:
+            name = f"{stem}_model_{model_index}"
+        obj = builder_geometry.build_bsp_geometry(
+            name=name,
+            vertices=model_verts,
+            face_polygons=model_polys,
+            face_materials=[record[2] for record in selected],
+            face_uvs=[record[3] for record in selected],
+            collection=collection,
+            material_list=material_list,
+            scale=scale,
+        )
+        obj["qb_bsp_model_index"] = model_index
+        if owner is not None:
+            builder_entities.tag_entity_properties(obj, owner)
+
+
+def _build_bsp_entities(operator: bpy.types.Operator,
+                        entities: list[dict[str, str]],
+                        root: bpy.types.Collection,
+                        stem: str,
+                        *, scale: float) -> None:
+    if not getattr(operator, "import_entities", True):
+        return
+    light_multiplier = float(getattr(operator, "light_energy", 1.0))
+    ent_coll = bpy.data.collections.new(f"{stem}_Entities")
+    root.children.link(ent_coll)
+    for entity in entities:
+        classname = entity.get("classname", "entity")
+        if not getattr(operator, "import_lights", True) and classname.startswith("light"):
+            continue
+        builder_entities.build_entity(
+            entity,
+            ent_coll,
+            scale=scale,
+            light_multiplier=light_multiplier,
+            operator=operator,
+        )
+
+
 def _detect_version(filepath: Path) -> tuple[str, int]:
     with open(filepath, "rb") as fh:
         head = fh.read(8)
     if len(head) < 4:
         raise ValueError("file too short to contain a BSP header")
     if head[:4] == IBSP_MAGIC:
+        if len(head) < 8:
+            raise ValueError("file too short to contain an IBSP version")
         version = struct.unpack("<i", head[4:8])[0]
         if version == BSP_VERSION_Q2:
             return "q2", version
@@ -100,17 +220,18 @@ def _import_q1(operator: bpy.types.Operator, context: bpy.types.Context,
         miptex_to_slot[idx] = len(material_list)
         material_list.append(mat)
 
-    face_polygons: list[list[int]] = []
-    face_mats: list[int] = []
-    face_uvs: list[list[tuple[float, float]]] = []
-    for face in bsp.faces:
+    face_records: list[tuple] = []
+    for face_index, face in enumerate(bsp.faces):
         poly = bsp.face_polygon(face)
         if len(poly) < 3:
             continue
-        face_polygons.append(poly)
         ti_idx = bsp.texinfos[face.texinfo_id].miptex_index if 0 <= face.texinfo_id < len(bsp.texinfos) else -1
-        face_mats.append(miptex_to_slot.get(ti_idx, -1))
-        face_uvs.append(_project_face_uvs(bsp, face, poly))
+        face_records.append((
+            face_index,
+            poly,
+            miptex_to_slot.get(ti_idx, -1),
+            _project_face_uvs(bsp, face, poly),
+        ))
 
     scene = context.scene
     root = bpy.data.collections.new(filepath.stem)
@@ -118,25 +239,19 @@ def _import_q1(operator: bpy.types.Operator, context: bpy.types.Context,
     geom_coll = bpy.data.collections.new(f"{filepath.stem}_Geometry")
     root.children.link(geom_coll)
 
-    builder_geometry.build_bsp_geometry(
-        name=filepath.stem,
-        vertices=bsp.vertices,
-        face_polygons=face_polygons,
-        face_materials=face_mats,
-        face_uvs=face_uvs,
-        collection=geom_coll,
-        material_list=material_list,
+    _build_submodel_objects(
+        bsp.entities,
+        bsp.models,
+        face_records,
+        bsp.vertices,
+        material_list,
+        geom_coll,
+        filepath.stem,
+        face_count=len(bsp.faces),
         scale=scale,
     )
 
-    if getattr(operator, "import_entities", True):
-        ent_coll = bpy.data.collections.new(f"{filepath.stem}_Entities")
-        root.children.link(ent_coll)
-        for entity in bsp.entities:
-            classname = entity.get("classname", "entity")
-            if not getattr(operator, "import_lights", True) and classname.startswith("light"):
-                continue
-            builder_entities.build_entity(entity, ent_coll, scale=scale, operator=operator)
+    _build_bsp_entities(operator, bsp.entities, root, filepath.stem, scale=scale)
 
 
 def run(operator: bpy.types.Operator, context: bpy.types.Context, filepath: str) -> None:
@@ -259,19 +374,21 @@ def _import_q2(operator: bpy.types.Operator, context: bpy.types.Context,
                     break
         texture_sizes[name] = size
 
-    face_polygons: list[list[int]] = []
-    face_mats: list[int] = []
-    face_uvs: list[list[tuple[float, float]]] = []
-    for face in bsp.faces:
+    face_records: list[tuple] = []
+    for face_index, face in enumerate(bsp.faces):
         poly = bsp.face_polygon(face)
         if len(poly) < 3:
             continue
-        face_polygons.append(poly)
         if 0 <= face.texinfo_id < len(bsp.texinfos):
-            face_mats.append(name_to_slot.get(bsp.texinfos[face.texinfo_id].texture_name, -1))
+            slot = name_to_slot.get(bsp.texinfos[face.texinfo_id].texture_name, -1)
         else:
-            face_mats.append(-1)
-        face_uvs.append(_project_q2_face_uvs(bsp, face, poly, texture_sizes))
+            slot = -1
+        face_records.append((
+            face_index,
+            poly,
+            slot,
+            _project_q2_face_uvs(bsp, face, poly, texture_sizes),
+        ))
 
     scene = context.scene
     root = bpy.data.collections.new(filepath.stem)
@@ -279,25 +396,19 @@ def _import_q2(operator: bpy.types.Operator, context: bpy.types.Context,
     geom_coll = bpy.data.collections.new(f"{filepath.stem}_Geometry")
     root.children.link(geom_coll)
 
-    builder_geometry.build_bsp_geometry(
-        name=filepath.stem,
-        vertices=bsp.vertices,
-        face_polygons=face_polygons,
-        face_materials=face_mats,
-        face_uvs=face_uvs,
-        collection=geom_coll,
-        material_list=material_list,
+    _build_submodel_objects(
+        bsp.entities,
+        bsp.models,
+        face_records,
+        bsp.vertices,
+        material_list,
+        geom_coll,
+        filepath.stem,
+        face_count=len(bsp.faces),
         scale=scale,
     )
 
-    if getattr(operator, "import_entities", True):
-        ent_coll = bpy.data.collections.new(f"{filepath.stem}_Entities")
-        root.children.link(ent_coll)
-        for entity in bsp.entities:
-            classname = entity.get("classname", "entity")
-            if not getattr(operator, "import_lights", True) and classname.startswith("light"):
-                continue
-            builder_entities.build_entity(entity, ent_coll, scale=scale, operator=operator)
+    _build_bsp_entities(operator, bsp.entities, root, filepath.stem, scale=scale)
 
 
 # ============================================================ Quake 3 ======
@@ -371,13 +482,10 @@ def _import_q3(operator: bpy.types.Operator, context: bpy.types.Context,
     root.children.link(geom_coll)
 
     # Pass 1: polygon + mesh face types use shared vertex buffer.
-    poly_indices: list[list[int]] = []
-    poly_uvs: list[list[tuple[float, float]]] = []
-    poly_mats: list[int] = []
-    for face in bsp.faces:
+    poly_records: list[tuple] = []
+    for face_index, face in enumerate(bsp.faces):
         if face.type == bsp_q3.FACE_TYPE_POLY or face.type == bsp_q3.FACE_TYPE_MESH:
             base = face.vertex
-            indices: list[int] = []
             if face.n_meshverts > 0:
                 # meshverts are triangle indices relative to face.vertex.
                 tri_indices = bsp.meshverts[face.meshvert:face.meshvert + face.n_meshverts]
@@ -385,34 +493,38 @@ def _import_q3(operator: bpy.types.Operator, context: bpy.types.Context,
                 for k in range(0, len(tri_indices), 3):
                     tri = tri_indices[k:k + 3]
                     if len(tri) == 3:
-                        poly_indices.append([base + tri[0], base + tri[1], base + tri[2]])
-                        poly_uvs.append([bsp.vertices[base + i].tex_uv for i in tri])
-                        poly_mats.append(face.texture)
+                        poly_records.append((
+                            face_index,
+                            [base + tri[0], base + tri[1], base + tri[2]],
+                            face.texture,
+                            [_flip_v(bsp.vertices[base + i].tex_uv) for i in tri],
+                        ))
                 continue
             indices = list(range(base, base + face.n_vertexes))
             if len(indices) >= 3:
-                poly_indices.append(indices)
-                poly_uvs.append([bsp.vertices[i].tex_uv for i in indices])
-                poly_mats.append(face.texture)
+                poly_records.append((
+                    face_index,
+                    indices,
+                    face.texture,
+                    [_flip_v(bsp.vertices[i].tex_uv) for i in indices],
+                ))
 
-    # Convert tex_uvs to (u, 1-v) for Blender convention.
-    flipped_uvs = [[(u, 1.0 - v) for (u, v) in poly] for poly in poly_uvs]
-    poly_vert_positions = [bsp.vertices[i].pos for i in range(len(bsp.vertices))]
-    builder_geometry.build_bsp_geometry(
-        name=filepath.stem,
-        vertices=poly_vert_positions,
-        face_polygons=poly_indices,
-        face_materials=poly_mats,
-        face_uvs=flipped_uvs,
-        collection=geom_coll,
-        material_list=material_list,
+    _build_submodel_objects(
+        bsp.entities,
+        bsp.models,
+        poly_records,
+        [v.pos for v in bsp.vertices],
+        material_list,
+        geom_coll,
+        filepath.stem,
+        face_count=len(bsp.faces),
         scale=scale,
     )
 
     # Pass 2: patches → tessellated quads, one mesh per patch (preserves
     # the original control grid as a custom property for future round-trip).
-    patches_coll = bpy.data.collections.new(f"{filepath.stem}_Patches")
-    root.children.link(patches_coll)
+    model_of_face = _model_of_face(bsp.models, len(bsp.faces))
+    patches_coll: bpy.types.Collection | None = None
     for fi, face in enumerate(bsp.faces):
         if face.type != bsp_q3.FACE_TYPE_PATCH:
             continue
@@ -434,7 +546,10 @@ def _import_q3(operator: bpy.types.Operator, context: bpy.types.Context,
             )
             continue
 
-        flipped_quads = [[(u, 1.0 - v) for (u, v) in (tess.uvs[i] for i in q)] for q in tess.quads]
+        if patches_coll is None:
+            patches_coll = bpy.data.collections.new(f"{filepath.stem}_Patches")
+            root.children.link(patches_coll)
+        flipped_quads = [[_flip_v(tess.uvs[i]) for i in q] for q in tess.quads]
         patch_obj = builder_geometry.build_bsp_geometry(
             name=f"{filepath.stem}_patch_{fi}",
             vertices=tess.vertices,
@@ -450,12 +565,6 @@ def _import_q3(operator: bpy.types.Operator, context: bpy.types.Context,
             [c.pos.x, c.pos.y, c.pos.z, c.uv[0], c.uv[1]] for c in controls
         ]
         patch_obj["qb_patch_size"] = [cw, ch]
+        patch_obj["qb_bsp_model_index"] = model_of_face[fi]
 
-    if getattr(operator, "import_entities", True):
-        ent_coll = bpy.data.collections.new(f"{filepath.stem}_Entities")
-        root.children.link(ent_coll)
-        for entity in bsp.entities:
-            classname = entity.get("classname", "entity")
-            if not getattr(operator, "import_lights", True) and classname.startswith("light"):
-                continue
-            builder_entities.build_entity(entity, ent_coll, scale=scale, operator=operator)
+    _build_bsp_entities(operator, bsp.entities, root, filepath.stem, scale=scale)

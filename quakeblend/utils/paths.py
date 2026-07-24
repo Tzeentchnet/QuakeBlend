@@ -51,7 +51,6 @@ class TextureRootIndex:
         entries.sort(key=lambda item: (item[0], item[1], item[2].as_posix().casefold()))
         for relative, kind, path in entries:
             suffix = path.suffix.casefold()
-            parts = relative.split("/")
             self._paths[kind].setdefault(relative, path)
             self._paths[kind].setdefault(relative[:-len(suffix)], path)
 

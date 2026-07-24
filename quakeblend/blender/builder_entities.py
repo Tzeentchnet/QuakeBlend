@@ -8,6 +8,7 @@ import bpy
 
 from ..formats.entities import parse_color, parse_origin
 from ..utils import log as qb_log
+from ..utils.constants import DEFAULT_QUAKE_LIGHT, QUAKE_LIGHT_TO_WATTS
 
 
 def _entity_label(entity: dict[str, str], classname: str) -> str:
@@ -15,9 +16,32 @@ def _entity_label(entity: dict[str, str], classname: str) -> str:
     return f"{classname} ({targetname})" if targetname else classname
 
 
+def tag_entity_properties(obj: bpy.types.Object, entity: dict[str, str]) -> None:
+    """Store every entity key/value on ``obj`` under the ``qb_prop_`` prefix.
+
+    The prefix keeps map keys out of Blender's own custom-property namespace
+    and is what :mod:`quakeblend.blender.exporter_map` reads back.
+    """
+    for key, value in entity.items():
+        try:
+            obj[f"qb_prop_{key}"] = value
+        except (TypeError, KeyError):
+            continue
+
+
+def _light_energy(entity: dict[str, str], scale: float, multiplier: float) -> float:
+    raw = entity.get("light", entity.get("_light", ""))
+    try:
+        value = float(str(raw).split()[0]) if str(raw).strip() else DEFAULT_QUAKE_LIGHT
+    except (ValueError, IndexError):
+        value = DEFAULT_QUAKE_LIGHT
+    return value * QUAKE_LIGHT_TO_WATTS * scale * scale * multiplier
+
+
 def build_entity(entity: dict[str, str], collection: bpy.types.Collection,
                  *,
                  scale: float,
+                 light_multiplier: float = 1.0,
                  operator: bpy.types.Operator | None = None) -> bpy.types.Object | None:
     classname = entity.get("classname", "entity")
     origin_str = entity.get("origin")
@@ -39,12 +63,8 @@ def build_entity(entity: dict[str, str], collection: bpy.types.Collection,
 
     if classname.startswith("light"):
         light_data = bpy.data.lights.new(name=classname, type="POINT")
-        # Quake "light" key is a brightness value (default 300).
-        try:
-            energy = float(entity.get("light", "300"))
-        except ValueError:
-            energy = 300.0
-        light_data.energy = energy
+        # Quake "light" is an intensity in Quake units; convert to watts.
+        light_data.energy = _light_energy(entity, scale, light_multiplier)
         if "_color" in entity:
             try:
                 light_data.color = parse_color(entity["_color"])
@@ -67,10 +87,6 @@ def build_entity(entity: dict[str, str], collection: bpy.types.Collection,
         obj.empty_display_type = "PLAIN_AXES"
 
     obj.location = location
-    for key, value in entity.items():
-        try:
-            obj[key] = value
-        except (TypeError, KeyError):
-            pass
+    tag_entity_properties(obj, entity)
     collection.objects.link(obj)
     return obj

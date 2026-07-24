@@ -55,6 +55,39 @@ def test_wrong_version_rejected() -> None:
         bsp_q1.read(io.BytesIO(bad))
 
 
+def test_decodes_models_lump() -> None:
+    # dmodel_t: mins[3] maxs[3] origin[3] node_id0..3 numleafs firstface numfaces
+    model_blob = struct.pack(
+        "<9f7i",
+        -16.0, -32.0, -48.0,
+        16.0, 32.0, 48.0,
+        1.0, 2.0, 3.0,
+        0, 0, 0, 0,   # node ids
+        4,            # numleafs
+        7, 3,         # firstface, numfaces
+    )
+    bsp = bsp_q1.read(io.BytesIO(_make_bsp({bsp_q1.LUMP_MODELS: model_blob})))
+    assert bsp.models == [bsp_q1.Model(
+        mins=bsp_q1.Vec3(-16.0, -32.0, -48.0),
+        maxs=bsp_q1.Vec3(16.0, 32.0, 48.0),
+        origin=bsp_q1.Vec3(1.0, 2.0, 3.0),
+        first_face=7,
+        face_count=3,
+    )]
+
+
+def test_validate_rejects_model_face_range_out_of_bounds() -> None:
+    bsp = bsp_q1.Bsp(models=[bsp_q1.Model(
+        mins=bsp_q1.Vec3(0.0, 0.0, 0.0),
+        maxs=bsp_q1.Vec3(1.0, 1.0, 1.0),
+        origin=bsp_q1.Vec3(0.0, 0.0, 0.0),
+        first_face=0,
+        face_count=2,
+    )])
+    with pytest.raises(ValueError, match=r"model 0"):
+        bsp.validate()
+
+
 def test_face_polygon_rejects_invalid_ledge_index() -> None:
     bsp = bsp_q1.Bsp()
     face = bsp_q1.Face(

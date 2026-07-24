@@ -87,6 +87,16 @@ class Face:
     lightmap_offset: int
 
 
+@dataclass(frozen=True)
+class Model:
+    """One BSP submodel: model 0 is the world, 1..N are brush entities."""
+    mins: Vec3
+    maxs: Vec3
+    origin: Vec3
+    first_face: int
+    face_count: int
+
+
 @dataclass
 class Bsp:
     version: int = BSP_VERSION_Q2
@@ -97,6 +107,7 @@ class Bsp:
     surfedges: List[int] = field(default_factory=list)  # signed
     faces: List[Face] = field(default_factory=list)
     texinfos: List[TexInfo] = field(default_factory=list)
+    models: List[Model] = field(default_factory=list)
     lighting: bytes = b""
 
     def validate(self) -> None:
@@ -141,6 +152,18 @@ class Bsp:
                     f"corrupt BSP: texinfo {texinfo_index} next_texinfo "
                     f"{texinfo.next_texinfo} out of range "
                     f"(texinfo_count={len(self.texinfos)})"
+                )
+        for model_index, model in enumerate(self.models):
+            if model.face_count < 0:
+                raise ValueError(
+                    f"corrupt BSP: model {model_index} has negative face count"
+                )
+            if (model.first_face < 0
+                    or model.first_face + model.face_count > len(self.faces)):
+                raise ValueError(
+                    f"corrupt BSP: model {model_index} face range "
+                    f"[{model.first_face}, {model.first_face + model.face_count}) "
+                    f"out of range (face_count={len(self.faces)})"
                 )
 
     def face_polygon(self, face: Face) -> List[int]:
@@ -267,6 +290,23 @@ def _read_texinfos(blob: bytes) -> list[TexInfo]:
     return out
 
 
+def _read_models(blob: bytes) -> list[Model]:
+    """Read ``dmodel_t`` records (mins/maxs/origin + headnode + face range)."""
+    r = BinaryReader(io.BytesIO(blob))
+    _warn_trailing_bytes(blob, 48)
+    out: list[Model] = []
+    for _ in range(len(blob) // 48):
+        values = r.unpack("9f3i")
+        out.append(Model(
+            mins=Vec3(values[0], values[1], values[2]),
+            maxs=Vec3(values[3], values[4], values[5]),
+            origin=Vec3(values[6], values[7], values[8]),
+            first_face=values[10],
+            face_count=values[11],
+        ))
+    return out
+
+
 def read(stream: BinaryIO) -> Bsp:
     data = stream.read()
     r = BinaryReader(io.BytesIO(data))
@@ -289,6 +329,7 @@ def read(stream: BinaryIO) -> Bsp:
     bsp.surfedges = _read_surfedges(_slice(data, lumps[LUMP_SURFEDGES]))
     bsp.faces = _read_faces(_slice(data, lumps[LUMP_FACES]))
     bsp.texinfos = _read_texinfos(_slice(data, lumps[LUMP_TEXINFO]))
+    bsp.models = _read_models(_slice(data, lumps[LUMP_MODELS]))
     bsp.lighting = _slice(data, lumps[LUMP_LIGHTING])
     return bsp
 

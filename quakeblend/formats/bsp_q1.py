@@ -90,6 +90,16 @@ class Face:
     lightmap_offset: int
 
 
+@dataclass(frozen=True)
+class Model:
+    """One BSP submodel: model 0 is the world, 1..N are brush entities."""
+    mins: Vec3
+    maxs: Vec3
+    origin: Vec3
+    first_face: int
+    face_count: int
+
+
 @dataclass
 class Bsp:
     version: int = BSP_VERSION
@@ -101,6 +111,7 @@ class Bsp:
     faces: List[Face] = field(default_factory=list)
     texinfos: List[TexInfo] = field(default_factory=list)
     miptextures: List[MipTexture | None] = field(default_factory=list)
+    models: List[Model] = field(default_factory=list)
     lighting: bytes = b""
 
     def validate(self) -> None:
@@ -144,6 +155,18 @@ class Bsp:
                     f"corrupt BSP: texinfo {texinfo_index} miptex "
                     f"{texinfo.miptex_index} out of range "
                     f"(miptex_count={len(self.miptextures)})"
+                )
+        for model_index, model in enumerate(self.models):
+            if model.face_count < 0:
+                raise ValueError(
+                    f"corrupt BSP: model {model_index} has negative face count"
+                )
+            if (model.first_face < 0
+                    or model.first_face + model.face_count > len(self.faces)):
+                raise ValueError(
+                    f"corrupt BSP: model {model_index} face range "
+                    f"[{model.first_face}, {model.first_face + model.face_count}) "
+                    f"out of range (face_count={len(self.faces)})"
                 )
 
     # Built per face: ordered vertex indices forming the face polygon.
@@ -267,6 +290,23 @@ def _read_faces(blob: bytes) -> list[Face]:
     return out
 
 
+def _read_models(blob: bytes) -> list[Model]:
+    """Read ``dmodel_t`` records (9 floats + headnode[4] + visleafs + face range)."""
+    r = BinaryReader(io.BytesIO(blob))
+    _warn_trailing_bytes(blob, 64)
+    out: list[Model] = []
+    for _ in range(len(blob) // 64):
+        values = r.unpack("9f7i")
+        out.append(Model(
+            mins=Vec3(values[0], values[1], values[2]),
+            maxs=Vec3(values[3], values[4], values[5]),
+            origin=Vec3(values[6], values[7], values[8]),
+            first_face=values[14],
+            face_count=values[15],
+        ))
+    return out
+
+
 def _read_miptex_lump(blob: bytes) -> list[MipTexture | None]:
     if not blob:
         return []
@@ -346,6 +386,7 @@ def read(stream: BinaryIO) -> Bsp:
     bsp.texinfos = _read_texinfos(_slice(data, lumps[LUMP_TEXINFO]))
     bsp.faces = _read_faces(_slice(data, lumps[LUMP_FACES]))
     bsp.miptextures = _read_miptex_lump(_slice(data, lumps[LUMP_MIPTEX]))
+    bsp.models = _read_models(_slice(data, lumps[LUMP_MODELS]))
     bsp.lighting = _slice(data, lumps[LUMP_LIGHTING])
     return bsp
 

@@ -16,15 +16,17 @@ from . import builder_entities, builder_geometry, builder_materials
 from .prefs import get_prefs
 
 
-def _load_wad_materials(wad_paths: list[Path]) -> dict[str, bpy.types.Material]:
+def _load_wad_materials(wad_paths: list[Path]) -> builder_materials.MaterialCache:
     """Load all WAD textures from the supplied paths and build materials."""
     pal = palette_mod.load_bundled("q1")
-    out: dict[str, bpy.types.Material] = {}
+    out = builder_materials.MaterialCache()
     for path in wad_paths:
         if not path.exists():
             continue
         archive = wad_mod.read_wad_path(path)
         for mt in archive.textures:
+            if mt.name in out:
+                continue
             tex_pal = palette_mod.from_bytes(mt.palette) if mt.palette else pal
             source_key = qb_paths.file_asset_key(
                 path,
@@ -108,15 +110,29 @@ def _tag_entity_anchor(obj: bpy.types.Object,
     obj["qb_entity_role"] = "ENTITY"
     obj["qb_entity_index"] = entity_index
     obj["qb_entity_has_origin"] = has_valid_origin
-    for key, value in properties.items():
-        try:
-            obj[f"qb_prop_{key}"] = value
-        except (TypeError, KeyError):
-            continue
+    builder_entities.tag_entity_properties(obj, properties)
+
+
+def _tag_face_surface_flags(obj: bpy.types.Object, brush: map_q1.MapBrush) -> None:
+    """Expose Quake 2 ``contents flags value`` face trailers on the object.
+
+    The arrays are indexed by *source* face order (``brush.faces``), which is
+    not the mesh polygon order -- CSG drops faces that clip away to nothing.
+    ``qb_face_textures`` is written alongside so the rows stay interpretable;
+    it is a newline-joined string because Blender ID properties cannot hold
+    arrays of strings (``.map`` texture tokens never contain whitespace).
+    """
+    if not any(face.tex.has_q2_trailing_fields for face in brush.faces):
+        return
+    obj["qb_face_textures"] = "\n".join(face.tex.name for face in brush.faces)
+    obj["qb_face_contents"] = [int(face.tex.contents) for face in brush.faces]
+    obj["qb_face_flags"] = [int(face.tex.surface_flags) for face in brush.faces]
+    obj["qb_face_value"] = [int(face.tex.value) for face in brush.faces]
 
 
 def run(operator: bpy.types.Operator, context: bpy.types.Context, filepath: str) -> None:
     scale = float(getattr(operator, "scale", 1.0 / 32.0))
+    light_multiplier = float(getattr(operator, "light_energy", 1.0))
     wad_paths_str: str = getattr(operator, "wad_paths", "") or ""
     if not wad_paths_str.strip():
         try:
@@ -142,7 +158,14 @@ def run(operator: bpy.types.Operator, context: bpy.types.Context, filepath: str)
         if texture_root is not None
         else None
     )
-    external_texture_kind = {"q2": "wal", "q3": "image"}.get(source_game)
+    # An explicit override pins the on-disk texture flavour; an auto-detected
+    # game may be wrong (a Q3 map with no Q3-specific syntax parses as Q1), so
+    # probe both .wal and image files in that case.
+    external_texture_kind = (
+        None
+        if requested_game == "auto"
+        else {"q2": "wal", "q3": "image"}.get(source_game)
+    )
     q2_palette = palette_mod.load_bundled("q2") if texture_root is not None else None
 
     scene = context.scene
@@ -215,7 +238,7 @@ def run(operator: bpy.types.Operator, context: bpy.types.Context, filepath: str)
                     if info is not None:
                         mat = _material_for_external(operator, tex_name, info, q2_palette)
                         if mat is not None:
-                            materials[tex_name] = mat
+                            materials.add(tex_name, mat)
                 tex_size = (64, 64)
                 mat = materials.get(tex_name)
                 if mat is not None and mat.node_tree is not None:
@@ -240,6 +263,7 @@ def run(operator: bpy.types.Operator, context: bpy.types.Context, filepath: str)
             if obj is not None:
                 obj["qb_owner_entity_index"] = ent_idx
                 obj["qb_brush_index"] = brush_idx
+                _tag_face_surface_flags(obj, brush)
 
         if getattr(operator, "import_entities", True):
             if (not getattr(operator, "import_lights", True)
@@ -249,6 +273,7 @@ def run(operator: bpy.types.Operator, context: bpy.types.Context, filepath: str)
                 entity.properties,
                 ent_coll,
                 scale=scale,
+                light_multiplier=light_multiplier,
                 operator=operator,
             )
             has_valid_origin = built is not None and bool(entity.properties.get("origin"))
@@ -266,7 +291,7 @@ def run(operator: bpy.types.Operator, context: bpy.types.Context, filepath: str)
 
 
 def _build_patch(operator, brush, collection, name: str,
-                 materials: dict[str, bpy.types.Material],
+                 materials: builder_materials.MaterialCache,
                  texture_index: qb_paths.TextureRootIndex | None,
                  external_texture_kind: str | None,
                  q2_palette: palette_mod.Palette | None,
@@ -284,7 +309,7 @@ def _build_patch(operator, brush, collection, name: str,
         if info is not None and q2_palette is not None:
             material = _material_for_external(operator, tex_name, info, q2_palette)
             if material is not None:
-                materials[tex_name] = material
+                materials.add(tex_name, material)
     if material is None:
         material = builder_materials.get_or_create_placeholder_material(
             tex_name,
@@ -302,7 +327,7 @@ def _build_patch(operator, brush, collection, name: str,
     else:
         uv_layer = mesh.uv_layers.new().data
     li = 0
-    for q, idx_quad in zip(faces, tess.quads):
+    for q in faces:
         for vert_idx in q:
             u, v = tess.uvs[vert_idx]
             uv_layer[li].uv = (u, 1.0 - v)

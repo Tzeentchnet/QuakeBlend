@@ -56,6 +56,16 @@ class IMPORT_OT_quake_map(bpy.types.Operator, ImportHelper):
         name="Import lights",
         default=True,
     )
+    light_energy: bpy.props.FloatProperty(  # type: ignore[valid-type]
+        name="Light energy multiplier",
+        description=(
+            "Scales converted light wattage. Quake light values are converted "
+            "to watts for the chosen world scale; raise or lower this to taste"
+        ),
+        default=1.0,
+        min=0.0,
+        soft_max=100.0,
+    )
     patch_level: bpy.props.IntProperty(  # type: ignore[valid-type]
         name="Patch tessellation level",
         description="Q3 patch subdivision (segments per Bezier span)",

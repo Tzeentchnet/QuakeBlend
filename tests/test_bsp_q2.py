@@ -50,6 +50,25 @@ def test_q2_rejects_q1_signature() -> None:
         bsp_q2.read(io.BytesIO(blob))
 
 
+def test_decodes_models_lump() -> None:
+    # dmodel_t: mins[3] maxs[3] origin[3] headnode firstface numfaces
+    model_blob = struct.pack(
+        "<9f3i",
+        -8.0, -8.0, -8.0,
+        8.0, 8.0, 8.0,
+        0.0, 0.0, 24.0,
+        0, 5, 2,
+    )
+    bsp = bsp_q2.read(io.BytesIO(_make_bsp({bsp_q2.LUMP_MODELS: model_blob})))
+    assert bsp.models == [bsp_q2.Model(
+        mins=bsp_q2.Vec3(-8.0, -8.0, -8.0),
+        maxs=bsp_q2.Vec3(8.0, 8.0, 8.0),
+        origin=bsp_q2.Vec3(0.0, 0.0, 24.0),
+        first_face=5,
+        face_count=2,
+    )]
+
+
 def test_face_polygon_rejects_invalid_surfedge_index() -> None:
     bsp = bsp_q2.Bsp()
     face = bsp_q2.Face(

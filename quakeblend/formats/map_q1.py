@@ -390,4 +390,14 @@ def detect_game(map_file: MapFile) -> str:
         for face in brush.faces
     ):
         return "q2"
+    # A Quake 3 map saved without brush primitives keeps no Q3-specific syntax,
+    # but its face names remain shader paths ("base_wall/c_met5_1"). Quake 1
+    # names come from a WAD and never contain a separator.
+    if any(
+        "/" in face.tex.name or "\\" in face.tex.name
+        for entity in map_file.entities
+        for brush in entity.brushes
+        for face in brush.faces
+    ):
+        return "q3"
     return "q1"

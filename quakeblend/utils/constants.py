@@ -5,6 +5,8 @@ No bpy imports; safe to use from the formats layer.
 
 from __future__ import annotations
 
+import math
+
 # Default world-unit scale. 1 Quake unit ≈ 1 inch ≈ 0.0254 m, but the community
 # standard for Blender import is 1/32 (32 units = 1 Blender meter), matching the
 # reference implementations.
@@ -13,6 +15,15 @@ DEFAULT_IMPORT_SCALE: float = 1.0 / 32.0
 # CSG plane-intersection epsilon used when classifying candidate vertices as
 # inside the brush half-space arrangement.
 CSG_EPSILON: float = 0.1
+
+# Quake "light" values are an intensity in Quake-unit space falling off as
+# 1/d^2; Blender point lights are watts falling off as P/(4*pi*d^2) in metres.
+# Equating the two gives P = 4*pi * light * scale^2, so a default 300-unit
+# light at the 1/32 import scale lands near 3.7 W instead of a blinding 300 W.
+QUAKE_LIGHT_TO_WATTS: float = 4.0 * math.pi
+
+# Fallback brightness for a light entity with no "light"/"_light" key.
+DEFAULT_QUAKE_LIGHT: float = 300.0
 
 # Palette index ranges considered "fullbright" (self-illuminating).
 # Quake 1: 224..254 (255 reserved as transparent in some assets).
