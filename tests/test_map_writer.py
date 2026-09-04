@@ -78,6 +78,27 @@ def _assert_brush_round_trip(expected, actual) -> None:
         _assert_face_round_trip(expected_face, actual_face)
 
 
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (0.0, "0"),
+        (-0.0, "0"),
+        (12.3456789, "12.3456789"),
+        (124938.2734375, "124938.273"),
+    ],
+)
+def test_format_entity_coordinate_preserves_float_precision(
+    value: float, expected: str,
+) -> None:
+    assert map_writer.format_entity_coordinate(value) == expected
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_format_entity_coordinate_rejects_non_finite(value: float) -> None:
+    with pytest.raises(ValueError, match="entity coordinate must be finite"):
+        map_writer.format_entity_coordinate(value)
+
+
 MULTI_BRUSH_Q1 = """
 {
 "classname" "worldspawn"

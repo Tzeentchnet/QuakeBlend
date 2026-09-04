@@ -221,17 +221,46 @@ def _import_q1(operator: bpy.types.Operator, context: bpy.types.Context,
         material_list.append(mat)
 
     face_records: list[tuple] = []
+    missing_texture_slot: int | None = None
+    missing_texture_faces = 0
     for face_index, face in enumerate(bsp.faces):
         poly = bsp.face_polygon(face)
         if len(poly) < 3:
             continue
         ti_idx = bsp.texinfos[face.texinfo_id].miptex_index if 0 <= face.texinfo_id < len(bsp.texinfos) else -1
+        material_slot = miptex_to_slot.get(ti_idx)
+        if material_slot is None:
+            missing_texture_faces += 1
+            if missing_texture_slot is None:
+                missing_texture_slot = len(material_list)
+                material_list.append(
+                    builder_materials.get_or_create_placeholder_material(
+                        "Missing BSP texture",
+                        asset_key=(
+                            qb_paths.file_asset_key(
+                                filepath,
+                                namespace="q1-bsp",
+                                member="missing-miptex",
+                            )
+                            + "|placeholder"
+                        ),
+                    )
+                )
+            material_slot = missing_texture_slot
         face_records.append((
             face_index,
             poly,
-            miptex_to_slot.get(ti_idx, -1),
+            material_slot,
             _project_face_uvs(bsp, face, poly),
         ))
+
+    if missing_texture_faces:
+        qb_log.report(
+            operator,
+            {"WARNING"},
+            f"Assigned a placeholder material to {missing_texture_faces} "
+            "Q1 BSP face(s) with missing texture data",
+        )
 
     scene = context.scene
     root = bpy.data.collections.new(filepath.stem)
@@ -538,7 +567,7 @@ def _import_q3(operator: bpy.types.Operator, context: bpy.types.Context,
         patch = patch_mod.Patch(width=cw, height=ch, controls=controls)
         try:
             tess = patch_mod.tessellate(patch, level=patch_level)
-        except Exception as exc:
+        except ValueError as exc:
             qb_log.report(
                 operator,
                 {"WARNING"},

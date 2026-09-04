@@ -245,8 +245,14 @@ def get_or_create_placeholder_material(name: str, *, asset_key: str) -> bpy.type
     mat = _find_asset_by_key(bpy.data.materials, asset_key)
     if mat is not None:
         return mat
-    mat = bpy.data.materials.new(_asset_name(bpy.data.materials, name, asset_key))
-    mat["qb_asset_key"] = asset_key
+    image = create_image(
+        f"{name} (missing)",
+        1,
+        1,
+        bytes((255, 0, 255, 255)),
+        asset_key=f"{asset_key}|image",
+    )
+    mat = get_or_create_material(name, image, asset_key=asset_key)
     mat["qb_placeholder"] = True
     return mat
 

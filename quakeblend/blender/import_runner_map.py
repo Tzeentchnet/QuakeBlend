@@ -299,7 +299,7 @@ def _build_patch(operator, brush, collection, name: str,
     try:
         tex_name, p = patch_mod.parse_patch_def2_block(brush.raw_payload)
         tess = patch_mod.tessellate(p, level=int(getattr(operator, "patch_level", 5)))
-    except Exception as exc:
+    except ValueError as exc:
         qb_log.report(operator, {"WARNING"}, f"Skipping patch {name}: {exc}")
         return None
 

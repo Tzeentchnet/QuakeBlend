@@ -227,6 +227,38 @@ def _check_transaction(extension_root: str) -> None:
     assert survivor.name in bpy.data.materials
 
 
+def _check_import_failure_rollback(extension_root: str, directory: Path) -> None:
+    patch = importlib.import_module(f"{extension_root}.formats.patch")
+    original_tessellate = patch.tessellate
+
+    def fail_tessellation(*_args, **_kwargs):
+        raise RuntimeError("intentional patch smoke failure")
+
+    path = directory / "smoke_patch_failure.map"
+    path.write_text(_Q3_PATCH_MAP, encoding="ascii")
+    patch.tessellate = fail_tessellation
+    try:
+        try:
+            result = bpy.ops.quakeblend.import_map(
+                filepath=str(path),
+                scale=0.25,
+                source_game="Q3",
+                texture_root=str(directory),
+                wad_paths=";",
+                import_entities=True,
+                import_lights=True,
+                patch_level=2,
+            )
+        except RuntimeError as exc:
+            assert "intentional patch smoke failure" in str(exc)
+            result = {"CANCELLED"}
+    finally:
+        patch.tessellate = original_tessellate
+
+    assert result == {"CANCELLED"}
+    assert _source_roots(path) == []
+
+
 def _collections_below(root: bpy.types.Collection) -> list[bpy.types.Collection]:
     collections = [root]
     for child in root.children:
@@ -306,6 +338,10 @@ def _check_map_workflows(extension_root: str, directory: Path) -> None:
         ]
         assert len(patches) == 1
         assert list(patches[0]["qb_patch_size"]) == [3, 3]
+        control_grid = patches[0]["qb_patch_control_grid"]
+        assert len(control_grid) == 9
+        assert all(len(control) == 5 for control in control_grid)
+        assert abs(float(control_grid[0][0]) - 0.123456789) < 1e-6
         patch_objects.extend(patches)
 
     export_root = q3_roots[-1]
@@ -316,7 +352,8 @@ def _check_map_workflows(extension_root: str, directory: Path) -> None:
         if obj.get("qb_entity_role") == "ENTITY"
         and int(obj["qb_entity_index"]) == 1
     )
-    anchor.location = (3.0, 5.0, 7.0)
+    anchor.location = (31234.567, 52345.678, -73456.789)
+    expected_origin = tuple(float(component) / 0.25 for component in anchor.location)
     for obj in bpy.context.selected_objects:
         obj.select_set(False)
     patch_objects[-1].select_set(True)
@@ -339,7 +376,14 @@ def _check_map_workflows(extension_root: str, directory: Path) -> None:
     assert "( 3 3 7 8 9 )" in exported_text
     assert "0.123456789" in exported_text
     exported = map_q1.parse_path(exported_path)
-    assert exported.entities[1].properties["origin"] == "12 20 28"
+    actual_origin = tuple(
+        float(component)
+        for component in exported.entities[1].properties["origin"].split()
+    )
+    assert max(
+        abs(actual - expected)
+        for actual, expected in zip(actual_origin, expected_origin)
+    ) < 0.001
 
 
 def _write_empty_bsp(path: Path, *, version: int, lump_count: int,
@@ -359,7 +403,7 @@ def _write_empty_bsp(path: Path, *, version: int, lump_count: int,
 
 
 def _write_q1_submodel_bsp(path: Path) -> None:
-    """A v29 BSP with two quads split across model 0 (world) and model 1."""
+    """A v29 BSP with textured and missing-texture submodel quads."""
     entities = (
         b'{ "classname" "worldspawn" }\n'
         b'{ "classname" "func_door" "model" "*1" "targetname" "smoke_door" }\n'
@@ -380,15 +424,21 @@ def _write_q1_submodel_bsp(path: Path) -> None:
     ]
     edges = b"".join(struct.pack("<HH", a, b) for a, b in edge_pairs)
     ledges = b"".join(struct.pack("<i", i) for i in range(1, 9))
-    texinfo = struct.pack(
-        "<8fII",
-        1.0, 0.0, 0.0, 0.0,
-        0.0, 1.0, 0.0, 0.0,
-        0xFFFFFFFF, 0,           # no miptex: keeps the miptex lump empty
+    texinfo = b"".join(
+        struct.pack(
+            "<8fII",
+            1.0, 0.0, 0.0, 0.0,
+            0.0, 1.0, 0.0, 0.0,
+            miptex_index, 0,
+        )
+        for miptex_index in (0, 1)
     )
     faces = b"".join(
-        struct.pack("<HHiHHBBBBi", 0, 0, ledge_id, 4, 0, 0, 0, 0, 0, -1)
-        for ledge_id in (0, 4)
+        struct.pack(
+            "<HHiHHBBBBi",
+            0, 0, ledge_id, 4, texinfo_id, 0, 0, 0, 0, -1,
+        )
+        for texinfo_id, ledge_id in enumerate((0, 4))
     )
     models = b"".join(
         struct.pack(
@@ -400,8 +450,17 @@ def _write_q1_submodel_bsp(path: Path) -> None:
         for first_face in (0, 1)
     )
 
+    texture = (
+        b"QB_BSP_SMOKE".ljust(16, b"\x00")
+        + struct.pack("<II", 1, 1)
+        + struct.pack("<IIII", 40, 41, 41, 41)
+        + bytes((1,))
+    )
+    miptextures = struct.pack("<iii", 2, 12, -1) + texture
+
     lumps = {
         0: entities,
+        2: miptextures,
         3: vertices,
         6: texinfo,
         7: faces,
@@ -522,6 +581,23 @@ def _check_bsp_submodels(directory: Path) -> None:
     assert len(by_model[1].data.vertices) == 4
     assert by_model[1]["qb_prop_targetname"] == "smoke_door"
     assert by_model[1].name.startswith(f"{path.stem}_func_door")
+    world_material = by_model[0].data.materials[
+        by_model[0].data.polygons[0].material_index
+    ]
+    missing_material = by_model[1].data.materials[
+        by_model[1].data.polygons[0].material_index
+    ]
+    assert "qb_placeholder" not in world_material
+    assert bool(missing_material.get("qb_placeholder", False))
+    assert world_material.as_pointer() != missing_material.as_pointer()
+    missing_image = next(
+        node.image
+        for node in missing_material.node_tree.nodes
+        if node.type == "TEX_IMAGE"
+    )
+    assert tuple(round(channel, 6) for channel in missing_image.pixels[:4]) == (
+        1.0, 0.0, 1.0, 1.0,
+    )
 
 
 def _check_bsp_and_wad_workflows(directory: Path) -> None:
@@ -587,13 +663,14 @@ def main() -> None:
     with tempfile.TemporaryDirectory(prefix="quakeblend-smoke-") as temp_dir:
         directory = Path(temp_dir)
         _check_map_workflows(args.extension_root, directory)
+        _check_import_failure_rollback(args.extension_root, directory)
         _check_texture_case_and_face_flags(directory)
         _check_bsp_and_wad_workflows(directory)
         _check_bsp_submodels(directory)
     _check_unregister(args.extension_root)
     print(
         "QUAKEBLEND_SMOKE_OK registration materials transaction "
-        "map textures bsp submodels wad export unregister"
+        "map rollback textures bsp submodels wad export unregister"
     )
 
 

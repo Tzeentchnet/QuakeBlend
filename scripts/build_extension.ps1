@@ -17,6 +17,17 @@ if (-not (Test-Path $manifest)) {
 
 New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
 $OutputDir = (Resolve-Path $OutputDir).Path
+$versionMatch = Select-String -Path $manifest -Pattern '^\s*version\s*=\s*"([^"]+)"'
+if ($null -eq $versionMatch) {
+    throw "version not found in $manifest"
+}
+$version = $versionMatch.Matches[0].Groups[1].Value
+$zipName = "quakeblend-$version.zip"
+$zipPath = Join-Path $OutputDir $zipName
+
+if (Test-Path $zipPath) {
+    Remove-Item -Force $zipPath
+}
 
 # Both builders consume the same extension root: manifest and __init__.py must
 # be siblings at the archive root.
@@ -40,16 +51,13 @@ try {
         if ($LASTEXITCODE -ne 0) {
             throw "Blender extension build failed with exit code $LASTEXITCODE"
         }
+        if (-not (Test-Path $zipPath)) {
+            throw "Blender extension build did not create $zipPath"
+        }
         return
     }
 
     Write-Host "Blender CLI not available; falling back to Compress-Archive"
-    $version = (Select-String -Path $manifest -Pattern '^\s*version\s*=\s*"([^"]+)"').Matches[0].Groups[1].Value
-    $zipName = "quakeblend-$version.zip"
-    $zipPath = Join-Path $OutputDir $zipName
-
-    if (Test-Path $zipPath) { Remove-Item -Force $zipPath }
-
     Compress-Archive -Path (Join-Path $staging "*") -DestinationPath $zipPath -Force
     Write-Host "Wrote $zipPath"
 } finally {

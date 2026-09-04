@@ -108,9 +108,9 @@ def _apply_entity_overlay(mf: map_q1.MapFile,
         # not have a valid source origin).
         if (ent.properties.get("classname") != "worldspawn"
                 and bool(obj.get("qb_entity_has_origin", False))):
-            x, y, z = obj.location
-            ent.properties["origin"] = (
-                f"{x * inv_scale:g} {y * inv_scale:g} {z * inv_scale:g}"
+            ent.properties["origin"] = " ".join(
+                map_writer.format_entity_coordinate(component * inv_scale)
+                for component in obj.location
             )
 
 
@@ -223,7 +223,11 @@ class EXPORT_OT_quake_map(bpy.types.Operator, ExportHelper):
         # Optional entity overlay from scene objects.
         if self.use_scene_entity_edits:
             scale = float(coll.get("qb_import_scale", 1.0 / 32.0))
-            _apply_entity_overlay(mf, coll, scale)
+            try:
+                _apply_entity_overlay(mf, coll, scale)
+            except ValueError as exc:
+                self.report({"ERROR"}, f"Failed to apply scene entity edits: {exc}")
+                return {"CANCELLED"}
 
         # Optional texture map.
         texture_map: dict[str, str] | None = None

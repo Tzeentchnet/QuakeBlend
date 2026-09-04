@@ -58,3 +58,44 @@ jobs:
         with:
           name: quakeblend-extension
           path: dist/quakeblend-*.zip
+
+  blender-smoke:
+    needs: test-and-build
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Blender 5.0.0
+        uses: bradyajohnston/setup-blender@9d0ba03aa0f7be59e09bdc70e08418a4298185f7 # v5.1.0
+        with:
+          version: "5.0.0"
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: quakeblend-extension
+          path: dist
+
+      - name: Install built extension
+        shell: pwsh
+        run: |
+          $zip = Get-ChildItem ./dist/quakeblend-*.zip | Select-Object -First 1
+          if ($null -eq $zip) { throw "Extension artifact was not downloaded" }
+          & blender --command extension install-file -r user_default -e $zip.FullName
+          if ($LASTEXITCODE -ne 0) {
+            throw "Blender extension install failed with exit code $LASTEXITCODE"
+          }
+
+      - name: Run Blender smoke tests
+        shell: pwsh
+        run: |
+          $output = & blender --background --python scripts/blender_smoke.py -- `
+            --extension-root bl_ext.user_default.quakeblend 2>&1
+          $exitCode = $LASTEXITCODE
+          $output | ForEach-Object { Write-Host $_ }
+          if ($exitCode -ne 0) {
+            throw "Blender smoke tests failed with exit code $exitCode"
+          }
+          if (($output -join "`n") -notmatch "QUAKEBLEND_SMOKE_OK") {
+            throw "Blender smoke tests did not emit the success marker"
+          }

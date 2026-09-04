@@ -34,6 +34,15 @@ def _fmt_num(x: float) -> str:
     return f"{x:.6f}".rstrip("0").rstrip(".")
 
 
+def format_entity_coordinate(value: float) -> str:
+    """Format a Blender-derived coordinate without losing float precision."""
+    if not math.isfinite(value):
+        raise ValueError(f"entity coordinate must be finite, got {value!r}")
+    if value == 0.0:
+        return "0"
+    return f"{value:.9g}"
+
+
 def _fmt_vec(v) -> str:
     return f"( {_fmt_num(v.x)} {_fmt_num(v.y)} {_fmt_num(v.z)} )"
 
