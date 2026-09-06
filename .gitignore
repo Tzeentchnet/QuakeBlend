@@ -3,10 +3,22 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 .pytest_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
 
 # Build outputs
 dist/
 build/
+
+# Local planning, private validation, and raw captures
+.private/
 
 # Editor
 .vscode/

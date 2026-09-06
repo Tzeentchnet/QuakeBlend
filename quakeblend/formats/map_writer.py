@@ -31,7 +31,7 @@ def _fmt_num(x: float) -> str:
         return "0"
     if x == int(x) and abs(x) < 1e15:
         return str(int(x))
-    return f"{x:.6f}".rstrip("0").rstrip(".")
+    return f"{x:.7f}".rstrip("0").rstrip(".")
 
 
 def format_entity_coordinate(value: float) -> str:

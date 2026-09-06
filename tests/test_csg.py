@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections import Counter
+
 import pytest
 
 from quakeblend.formats.common import Plane, Vec3
@@ -141,3 +143,34 @@ def test_degenerate_brush_with_contradictory_planes_is_empty() -> None:
     planes.append(Plane(Vec3(+1, 0, 0), -2.0))
     rings = brush_faces_from_planes(planes)
     assert all(len(ring) == 0 for ring in rings)
+
+
+@pytest.mark.parametrize("bevel", [0.02, 0.002])
+@pytest.mark.parametrize("offset", [Vec3(0, 0, 0), Vec3(-4096, 2048, 1024)])
+@pytest.mark.parametrize("reverse", [False, True])
+def test_small_bevel_keeps_distinct_corners_and_closed_planar_faces(bevel, offset, reverse):
+    planes = _axis_aligned_cube()
+    normal = Vec3(1, 1, 0).normalized()
+    planes.append(Plane(normal, (2 - bevel) / 2**0.5))
+    planes = [Plane(plane.normal, plane.dist + plane.normal.dot(offset)) for plane in planes]
+    if reverse:
+        planes.reverse()
+    rings = brush_faces_from_planes(planes)
+    assert sorted(len(ring) for ring in rings) == [4, 4, 4, 4, 4, 5, 5]
+    assert len({point for ring in rings for point in ring}) == 10
+    for plane, ring in zip(planes, rings):
+        assert all(abs(plane.signed_distance(point)) < 1e-7 for point in ring)
+        assert all(other.signed_distance(point) < 1e-7
+                   for point in ring for other in planes)
+    edges = Counter(frozenset((first, second)) for ring in rings
+                    for first, second in zip(ring, ring[1:] + ring[:1]))
+    assert len(edges) == 15
+    assert set(edges.values()) == {2}
+
+
+def test_nearby_redundant_plane_does_not_acquire_a_false_face():
+    planes = _axis_aligned_cube()
+    normal = Vec3(1, 0.001, 0).normalized()
+    planes.append(Plane(normal, 1.05))
+    rings = brush_faces_from_planes(planes)
+    assert [len(ring) for ring in rings] == [4, 4, 4, 4, 4, 4, 0]

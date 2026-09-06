@@ -1,7 +1,7 @@
 schema_version = "1.0.0"
 
 id = "quakeblend"
-version = "1.2.1"
+version = "1.3.0"
 name = "QuakeBlend"
 tagline = "Import Quake 1/2/3 maps, BSPs, and texture archives"
 maintainer = "QuakeBlend Contributors"

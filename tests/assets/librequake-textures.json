@@ -1,0 +1,743 @@
+{
+  "schema_version": 1,
+  "assets": [
+    {
+      "id": "librequake-e3m4-textures",
+      "cache_directory": "librequake-textures-3a7d9f1e",
+      "repository": "lavenderdotpet/LibreQuake",
+      "revision": "3a7d9f1e3845839747efb666b787f26a0565b1ba",
+      "source_base_url": "https://raw.githubusercontent.com/lavenderdotpet/LibreQuake/3a7d9f1e3845839747efb666b787f26a0565b1ba/",
+      "license": "BSD-3-Clause",
+      "license_scope": "Original PNG subset; retain all five included upstream notices.",
+      "qualification": "partial-exact-name-png-subset",
+      "format": "png-texture-subset",
+      "source_map_asset": "librequake-e3m4",
+      "coverage": {
+        "revision": "3a7d9f1e3845839747efb666b787f26a0565b1ba",
+        "required_textures": 83,
+        "exact": {
+          "flat_01_a": "texture-wads/lq_palette/flat_01_a.png",
+          "gardgrass_1": "texture-wads/lq_legacy/gardgrass_1.png",
+          "grk_arch1": "texture-wads/lq_greek/grk_arch1.png",
+          "grk_arch1_2": "texture-wads/lq_greek/grk_arch1_2.png",
+          "grk_arch1_a": "texture-wads/lq_greek/grk_arch1_a.png",
+          "grk_arch1_b": "texture-wads/lq_greek/grk_arch1_b.png",
+          "grk_arch1_d": "texture-wads/lq_greek/grk_arch1_d.png",
+          "grk_arch2": "texture-wads/lq_greek/grk_arch2.png",
+          "grk_arch2_2": "texture-wads/lq_greek/grk_arch2_2.png",
+          "grk_brk15": "texture-wads/lq_greek/grk_brk15.png",
+          "grk_brk15_b": "texture-wads/lq_greek/grk_brk15_b.png",
+          "grk_brk15_c": "texture-wads/lq_greek/grk_brk15_c.png",
+          "grk_brk15_f": "texture-wads/lq_greek/grk_brk15_f.png",
+          "grk_brk16": "texture-wads/lq_greek/grk_brk16.png",
+          "grk_brk16_a": "texture-wads/lq_greek/grk_brk16_a.png",
+          "grk_brk16_f": "texture-wads/lq_greek/grk_brk16_f.png",
+          "grk_brk17": "texture-wads/lq_greek/grk_brk17.png",
+          "grk_brk17_f": "texture-wads/lq_greek/grk_brk17_f.png",
+          "grk_but1": "texture-wads/lq_greek/grk_but1.png",
+          "grk_det1": "texture-wads/lq_greek/grk_det1.png",
+          "grk_door1": "texture-wads/lq_greek/grk_door1.png",
+          "grk_door2": "texture-wads/lq_greek/grk_door2.png",
+          "grk_door3": "texture-wads/lq_greek/grk_door3.png",
+          "grk_ebrick10": "texture-wads/lq_greek/grk_ebrick10.png",
+          "grk_ebrick10_bl": "texture-wads/lq_greek/grk_ebrick10_bl.png",
+          "grk_ebrick22": "texture-wads/lq_greek/grk_ebrick22.png",
+          "grk_ebrick23": "texture-wads/lq_greek/grk_ebrick23.png",
+          "grk_flr1": "texture-wads/lq_greek/grk_flr1.png",
+          "grk_flr2": "texture-wads/lq_greek/grk_flr2.png",
+          "grk_flr3": "texture-wads/lq_greek/grk_flr3.png",
+          "grk_flr4_1": "texture-wads/lq_greek/grk_flr4_1.png",
+          "grk_flr4_2": "texture-wads/lq_greek/grk_flr4_2.png",
+          "grk_flr4_3": "texture-wads/lq_greek/grk_flr4_3.png",
+          "grk_flr4_5": "texture-wads/lq_greek/grk_flr4_5.png",
+          "grk_flr4_6": "texture-wads/lq_greek/grk_flr4_6.png",
+          "grk_flr4_8": "texture-wads/lq_greek/grk_flr4_8.png",
+          "grk_flr5_1": "texture-wads/lq_greek/grk_flr5_1.png",
+          "grk_flr5_4": "texture-wads/lq_greek/grk_flr5_4.png",
+          "grk_key_sl2": "texture-wads/lq_greek/grk_key_sl2.png",
+          "grk_lion2": "texture-wads/lq_greek/grk_lion2.png",
+          "grk_lion4": "texture-wads/lq_greek/grk_lion4.png",
+          "grk_met1": "texture-wads/lq_greek/grk_met1.png",
+          "grk_met1b_trim": "texture-wads/lq_greek/grk_met1b_trim.png",
+          "grk_met_plt": "texture-wads/lq_greek/grk_met_plt.png",
+          "grk_mural1": "texture-wads/lq_greek/grk_mural1.png",
+          "grk_mural2": "texture-wads/lq_greek/grk_mural2.png",
+          "grk_plat1_side": "texture-wads/lq_greek/grk_plat1_side.png",
+          "grk_plat1_top": "texture-wads/lq_greek/grk_plat1_top.png",
+          "grk_trim1": "texture-wads/lq_greek/grk_trim1.png",
+          "grk_trim1_3": "texture-wads/lq_greek/grk_trim1_3.png",
+          "grk_trim1_3_s": "texture-wads/lq_greek/grk_trim1_3_s.png",
+          "grk_trim1_5": "texture-wads/lq_greek/grk_trim1_5.png",
+          "grk_trim1_5_s": "texture-wads/lq_greek/grk_trim1_5_s.png",
+          "grk_trim1_6_s": "texture-wads/lq_greek/grk_trim1_6_s.png",
+          "grk_trim1_7_s": "texture-wads/lq_greek/grk_trim1_7_s.png",
+          "grk_trim2": "texture-wads/lq_greek/grk_trim2.png",
+          "grk_wall1": "texture-wads/lq_greek/grk_wall1.png",
+          "grk_wall2": "texture-wads/lq_greek/grk_wall2.png",
+          "grk_wall3": "texture-wads/lq_greek/grk_wall3.png",
+          "grk_wall3b": "texture-wads/lq_greek/grk_wall3b.png",
+          "may_flesh2_b": "texture-wads/lq_flesh/may_flesh2_b.png",
+          "med_csl_flr1_1": "texture-wads/lq_medieval/med_csl_flr1_1.png",
+          "med_csl_trm1": "texture-wads/lq_medieval/med_csl_trm1.png",
+          "med_ebrick3": "texture-wads/lq_medieval/med_ebrick3.png",
+          "med_flat16": "texture-wads/lq_terra/med_flat16.png",
+          "med_ret_rock1": "texture-wads/lq_legacy/med_ret_rock1.png",
+          "med_rock5": "texture-wads/lq_terra/med_rock5.png",
+          "med_trim3_3": "texture-wads/lq_medieval/med_trim3_3.png",
+          "med_wood_riv1c": "texture-wads/lq_wood/med_wood_riv1c.png",
+          "qr": "texture-wads/lq_props/qr.png",
+          "sky_star": "texture-wads/lq_liquidsky/sky_star.png"
+        },
+        "ambiguous": {
+          "clip": [
+            "texture-wads/lq_dev/clip.png",
+            "texture-wads/lq_dev_legacy/clip.png",
+            "texture-wads/lq_utility/clip.png"
+          ],
+          "skip": [
+            "texture-wads/lq_dev/skip.png",
+            "texture-wads/lq_dev_legacy/skip.png",
+            "texture-wads/lq_utility/skip.png"
+          ],
+          "trigger": [
+            "texture-wads/lq_dev/trigger.png",
+            "texture-wads/lq_dev_legacy/trigger.png",
+            "texture-wads/lq_utility/trigger.png"
+          ]
+        },
+        "encoded_candidates": {
+          "*blood1": [
+            "texture-wads/lq_dev/star_blood1.png",
+            "texture-wads/lq_dev_legacy/star_blood1.png",
+            "texture-wads/lq_liquidsky/star_blood1.png"
+          ],
+          "*water0": [
+            "texture-wads/lq_liquidsky/star_water0.png"
+          ],
+          "*water2": [
+            "texture-wads/lq_dev/star_water2.png",
+            "texture-wads/lq_dev_legacy/star_water2.png",
+            "texture-wads/lq_liquidsky/star_water2.png"
+          ],
+          "*waterskip": [
+            "texture-wads/lq_dev/star_waterskip.png",
+            "texture-wads/lq_dev_legacy/star_waterskip.png",
+            "texture-wads/lq_liquidsky/star_waterskip.png",
+            "texture-wads/lq_utility/star_waterskip.png"
+          ],
+          "+0grk_but1": [
+            "texture-wads/lq_greek/plus_0grk_but1_fbr.png"
+          ],
+          "+0grk_hbut": [
+            "texture-wads/lq_greek/plus_0grk_hbut_fbr.png"
+          ],
+          "+0lava_fall3": [
+            "texture-wads/lq_liquidsky/plus_0lava_fall3_fbr.png"
+          ],
+          "+0water_f1": [
+            "texture-wads/lq_liquidsky/plus_0water_f1.png"
+          ],
+          "+0water_f2": [
+            "texture-wads/lq_liquidsky/plus_0water_f2.png"
+          ]
+        },
+        "missing": []
+      },
+      "files": [
+        {
+          "path": "docs/COPYING",
+          "bytes": 1697,
+          "sha256": "c3426ae10fd52ab1a3c3d4de4f2fae60543403e3cfd09ae5dc2ec16ae4717d28"
+        },
+        {
+          "path": "docs/CREDITS",
+          "bytes": 3254,
+          "sha256": "60b632851de3e5d02cb96ed158ff06700ced1c9fb6425f2d5d10509392021bd0"
+        },
+        {
+          "path": "docs/README-IMPORTANT-LICENCE-INFO",
+          "bytes": 706,
+          "sha256": "121e4f2bbae888f442be76795c7e1b431bbfce9c7dd968407b4da969ccb50eae"
+        },
+        {
+          "path": "docs/freedoom-docs/COPYING.adoc",
+          "bytes": 1611,
+          "sha256": "07b1d04bb498dfcce23bc186bf72ae0356f67c1f90361e9d2394e54b296facc8"
+        },
+        {
+          "path": "docs/freedoom-docs/CREDITS",
+          "bytes": 14715,
+          "sha256": "dc39ff7086cffed47aabe8dbfff160916f8043c4aa9f6156310d5d9cf2dd69ee"
+        },
+        {
+          "path": "texture-wads/lq_flesh/may_flesh2_b.png",
+          "bytes": 27903,
+          "sha256": "085925186a4f0dd6085cc5f70632d2dc79865b7513bdb92e8a02580196ae0b0b",
+          "texture_name": "may_flesh2_b",
+          "width": 128,
+          "height": 128
+        },
+        {
+          "path": "texture-wads/lq_greek/grk_arch1.png",
+          "bytes": 10488,
+          "sha256": "c2327f93488ead0da11ece468bf016b5dc02d201dbeb50b08472d383f5f9322d",
+          "texture_name": "grk_arch1",
+          "width": 96,
+          "height": 128
+        },
+        {
+          "path": "texture-wads/lq_greek/grk_arch1_2.png",
+          "bytes": 11767,
+          "sha256": "18b1f1fa3d29db125fabcbac655681ec3c8d88273527be81fbca55b1ac06f40c",
+          "texture_name": "grk_arch1_2",
+          "width": 96,
+          "height": 128
+        },
+        {
+          "path": "texture-wads/lq_greek/grk_arch1_a.png",
+          "bytes": 9635,
+          "sha256": "1cc45fdf0ebd91daccd6907f914eb3f1de544c15f52c2204a093634739aff9df",
+          "texture_name": "grk_arch1_a",
+          "width": 128,
+          "height": 128
+        },
+        {
+          "path": "texture-wads/lq_greek/grk_arch1_b.png",
+          "bytes": 10033,
+          "sha256": "36f96e818e6f991b660d5a56451c9c2eb73e5c07c6fd6079b373fae290b7a6ef",
+          "texture_name": "grk_arch1_b",
+          "width": 128,
+          "height": 128
+        },
+        {
+          "path": "texture-wads/lq_greek/grk_arch1_d.png",
+          "bytes": 9995,
+          "sha256": "004920a51e77f26fd76e28e19497102f1adf1e41b4774993c040dac6cfaac0ab",
+          "texture_name": "grk_arch1_d",
+          "width": 128,
+          "height": 128
+        },
+        {
+          "path": "texture-wads/lq_greek/grk_arch2.png",
+          "bytes": 8100,
+          "sha256": "407c6b77657e931cfc11720c568fd900a82091bb67cb5b53c3b285f333dca7f4",
+          "texture_name": "grk_arch2",
+          "width": 32,
+          "height": 128
+        },
+        {
+          "path": "texture-wads/lq_greek/grk_arch2_2.png",
+          "bytes": 8410,
+          "sha256": "db99b951bb215aa0b63b336ecbcd8eda32dc728c0109a53868c34aeee80368af",
+          "texture_name": "grk_arch2_2",
+          "width": 32,
+          "height": 128
+        },
+        {
+          "path": "texture-wads/lq_greek/grk_brk15.png",
+          "bytes": 14859,
+          "sha256": "8a8bc40fec5a155697559fe2d287cfc46a46a846d42764d078b66eacb77dfda7",
+          "texture_name": "grk_brk15",
+          "width": 128,
+          "height": 128
+        },
+        {
+          "path": "texture-wads/lq_greek/grk_brk15_b.png",
+          "bytes": 14554,
+          "sha256": "5f786e2954366a585b53807c2a7c0340bfb0067f7021e8403fbc73b8a6ca3c2a",
+          "texture_name": "grk_brk15_b",
+          "width": 128,
+          "height": 128
+        },
+        {
+          "path": "texture-wads/lq_greek/grk_brk15_c.png",
+          "bytes": 42343,
+          "sha256": "d265d642a89322098436300e02f231c3f1f46bde508ac195b7a28fbd06162190",
+          "texture_name": "grk_brk15_c",
+          "width": 128,
+          "height": 128
+        },
+        {
+          "path": "texture-wads/lq_greek/grk_brk15_f.png",
+          "bytes": 13132,
+          "sha256": "80d953f35602cf6c0f5f178fe7c21bf13e2c7790eec47360833e54f57f5c3ef1",
+          "texture_name": "grk_brk15_f",
+          "width": 128,
+          "height": 128
+        },
+        {
+          "path": "texture-wads/lq_greek/grk_brk16.png",
+          "bytes": 17043,
+          "sha256": "208fc6c55d86369f74bb5556a794bf76af31b5ab4886f59cd86279e15ee7062f",
+          "texture_name": "grk_brk16",
+          "width": 128,
+          "height": 128
+        },
+        {
+          "path": "texture-wads/lq_greek/grk_brk16_a.png",
+          "bytes": 16673,
+          "sha256": "f7470630ce29aa0990d211c95ca8d28df87a6cdeddf30b18de175438ef3487da",
+          "texture_name": "grk_brk16_a",
+          "width": 128,
+          "height": 128
+        },
+        {
+          "path": "texture-wads/lq_greek/grk_brk16_f.png",
+          "bytes": 18515,
+          "sha256": "62fae8e08c07cfdfcdbd74d1e44c8cc431e3d94a07ce455cb9c77c29e3605bde",
+          "texture_name": "grk_brk16_f",
+          "width": 128,
+          "height": 128
+        },
+        {
+          "path": "texture-wads/lq_greek/grk_brk17.png",
+          "bytes": 59796,
+          "sha256": "7404e700ba7f2dd196df79a8073cee84029327f798860af911dbbd562c9d1f31",
+          "texture_name": "grk_brk17",
+          "width": 256,
+          "height": 256
+        },
+        {
+          "path": "texture-wads/lq_greek/grk_brk17_f.png",
+          "bytes": 35121,
+          "sha256": "6327f2981ea6332bdae14feddaa3b49e03f6f4647e06569acb414ed1777d7165",
+          "texture_name": "grk_brk17_f",
+          "width": 128,
+          "height": 128
+        },
+        {
+          "path": "texture-wads/lq_greek/grk_but1.png",
+          "bytes": 1521,
+          "sha256": "3d4f3f7fd450ad6dde506132959a54789c6e07d63c65d8e4643ab8f9f3ff5573",
+          "texture_name": "grk_but1",
+          "width": 32,
+          "height": 32
+        },
+        {
+          "path": "texture-wads/lq_greek/grk_det1.png",
+          "bytes": 4747,
+          "sha256": "453bbb4369e19c1cfe1a95bc5c775b512f6420584b7e7c40093f2db511918646",
+          "texture_name": "grk_det1",
+          "width": 32,
+          "height": 128
+        },
+        {
+          "path": "texture-wads/lq_greek/grk_door1.png",
+          "bytes": 36580,
+          "sha256": "aebcedbd5e81a0d66cd9aa59ebe17c96b1c81793632e6ad49b62519e3d3294a8",
+          "texture_name": "grk_door1",
+          "width": 128,
+          "height": 128
+        },
+        {
+          "path": "texture-wads/lq_greek/grk_door2.png",
+          "bytes": 23849,
+          "sha256": "6a03e6769760571474b1861a7d54d75eb4a7c4c833fe2aca963fb1e9d30f0d67",
+          "texture_name": "grk_door2",
+          "width": 128,
+          "height": 128
+        },
+        {
+          "path": "texture-wads/lq_greek/grk_door3.png",
+          "bytes": 31591,
+          "sha256": "21e31a74a11208f47a0fa0c6c78dd029c4b4ccdf518adfd5bbe276321af58916",
+          "texture_name": "grk_door3",
+          "width": 128,
+          "height": 128
+        },
+        {
+          "path": "texture-wads/lq_greek/grk_ebrick10.png",
+          "bytes": 18434,
+          "sha256": "e775a9afcbcfd872a272dbe574ee9ba55cea88e26349ee8ba8dfa67c659b20ca",
+          "texture_name": "grk_ebrick10",
+          "width": 128,
+          "height": 128
+        },
+        {
+          "path": "texture-wads/lq_greek/grk_ebrick10_bl.png",
+          "bytes": 28042,
+          "sha256": "bba4b1d86e5922f505f306233a84e4ad5950618e954b7b81feef48b65a9c79ba",
+          "texture_name": "grk_ebrick10_bl",
+          "width": 128,
+          "height": 128
+        },
+        {
+          "path": "texture-wads/lq_greek/grk_ebrick22.png",
+          "bytes": 34541,
+          "sha256": "0eee4a6b5d046b65bbb63586b95830acd993071a2e5d4f30b428565dde690a26",
+          "texture_name": "grk_ebrick22",
+          "width": 128,
+          "height": 128
+        },
+        {
+          "path": "texture-wads/lq_greek/grk_ebrick23.png",
+          "bytes": 13981,
+          "sha256": "6354b52b0333990786839b245cb4ecb9c4c7f93174b6441f11b54642cc4f6470",
+          "texture_name": "grk_ebrick23",
+          "width": 128,
+          "height": 128
+        },
+        {
+          "path": "texture-wads/lq_greek/grk_flr1.png",
+          "bytes": 382,
+          "sha256": "87ebdf79c89576e88e021e04943bf6dfd013af1c27d6eced23ac218ec07b5ec4",
+          "texture_name": "grk_flr1",
+          "width": 16,
+          "height": 16
+        },
+        {
+          "path": "texture-wads/lq_greek/grk_flr2.png",
+          "bytes": 1165,
+          "sha256": "bb9dbb8f44858b57891e0e8a0be2c5af6cc0126771e32c48d3efa7b85ed63ce4",
+          "texture_name": "grk_flr2",
+          "width": 32,
+          "height": 32
+        },
+        {
+          "path": "texture-wads/lq_greek/grk_flr3.png",
+          "bytes": 3153,
+          "sha256": "94cc02fdf268fe6b31d8d63b07aa89317821e524f33142bfbff65afaf68ffc1e",
+          "texture_name": "grk_flr3",
+          "width": 64,
+          "height": 64
+        },
+        {
+          "path": "texture-wads/lq_greek/grk_flr4_1.png",
+          "bytes": 2400,
+          "sha256": "89650ffbd8a3c2addd0c49c6f971f9f8a9fff8ca8f6802531341c49cad1cba56",
+          "texture_name": "grk_flr4_1",
+          "width": 64,
+          "height": 64
+        },
+        {
+          "path": "texture-wads/lq_greek/grk_flr4_2.png",
+          "bytes": 4018,
+          "sha256": "b03273ba8c63be2f523898855392d3c1e2dbc5cb205eda0f522d366c97d68c41",
+          "texture_name": "grk_flr4_2",
+          "width": 64,
+          "height": 64
+        },
+        {
+          "path": "texture-wads/lq_greek/grk_flr4_3.png",
+          "bytes": 3082,
+          "sha256": "60c6c8d9717c3197493b1488955b2a5b50a7af79af14ba4afcc4cee485bc5871",
+          "texture_name": "grk_flr4_3",
+          "width": 64,
+          "height": 64
+        },
+        {
+          "path": "texture-wads/lq_greek/grk_flr4_5.png",
+          "bytes": 12119,
+          "sha256": "eb248f2e22649bb37766a2d57939a769d0904001f849a3758d0444c803d97040",
+          "texture_name": "grk_flr4_5",
+          "width": 64,
+          "height": 64
+        },
+        {
+          "path": "texture-wads/lq_greek/grk_flr4_6.png",
+          "bytes": 11350,
+          "sha256": "8de2f43f488ed75d7ad03af2d578f6c91961843ad6b40a223d674f067c5987b6",
+          "texture_name": "grk_flr4_6",
+          "width": 64,
+          "height": 64
+        },
+        {
+          "path": "texture-wads/lq_greek/grk_flr4_8.png",
+          "bytes": 5675,
+          "sha256": "5fbbab160132a59253164a5de90e69d61011dcf8182ecd745960e38f47d72191",
+          "texture_name": "grk_flr4_8",
+          "width": 64,
+          "height": 64
+        },
+        {
+          "path": "texture-wads/lq_greek/grk_flr5_1.png",
+          "bytes": 3536,
+          "sha256": "6ed6d43fd3fd7a8894ad77c62fa7ae3bdb35ac19bd83693cdfca998368993a03",
+          "texture_name": "grk_flr5_1",
+          "width": 64,
+          "height": 64
+        },
+        {
+          "path": "texture-wads/lq_greek/grk_flr5_4.png",
+          "bytes": 3314,
+          "sha256": "6fe5092e4122de6449c79ecdab367cd02ea35694bf82bc41167be99be991236f",
+          "texture_name": "grk_flr5_4",
+          "width": 64,
+          "height": 64
+        },
+        {
+          "path": "texture-wads/lq_greek/grk_key_sl2.png",
+          "bytes": 1554,
+          "sha256": "0c3e60e90284544aad9f510deafd0a8ca8b87399fa81f87079335712d10fe2f4",
+          "texture_name": "grk_key_sl2",
+          "width": 32,
+          "height": 32
+        },
+        {
+          "path": "texture-wads/lq_greek/grk_lion2.png",
+          "bytes": 16000,
+          "sha256": "2e2a4348356dc57007c87705a89d77136e7b76f780ddf7c0a52d1fe83e71876b",
+          "texture_name": "grk_lion2",
+          "width": 128,
+          "height": 128
+        },
+        {
+          "path": "texture-wads/lq_greek/grk_lion4.png",
+          "bytes": 17400,
+          "sha256": "c25c255e91cc48a876604a8bac69e285168782d2bd34460c9c84e577902c6a05",
+          "texture_name": "grk_lion4",
+          "width": 128,
+          "height": 128
+        },
+        {
+          "path": "texture-wads/lq_greek/grk_met1.png",
+          "bytes": 18965,
+          "sha256": "dccbad894824a9d3d4a9f5dcd287d3001ae3919f01dcf50f6284387f371d9a6c",
+          "texture_name": "grk_met1",
+          "width": 128,
+          "height": 128
+        },
+        {
+          "path": "texture-wads/lq_greek/grk_met1b_trim.png",
+          "bytes": 10275,
+          "sha256": "2e84fae65b44460c81e8bbd837192216dbc9cabca175c9c81ea95c9ea9475a6c",
+          "texture_name": "grk_met1b_trim",
+          "width": 128,
+          "height": 128
+        },
+        {
+          "path": "texture-wads/lq_greek/grk_met_plt.png",
+          "bytes": 39158,
+          "sha256": "275369d27f2413236b728c6e92b5a8b932142d8dd55f73844293d3c861a05bbd",
+          "texture_name": "grk_met_plt",
+          "width": 128,
+          "height": 128
+        },
+        {
+          "path": "texture-wads/lq_greek/grk_mural1.png",
+          "bytes": 42590,
+          "sha256": "9c9aae1ade54248909e39baa52bc2fd5c3db37715d137327a276591fe07907c5",
+          "texture_name": "grk_mural1",
+          "width": 192,
+          "height": 128
+        },
+        {
+          "path": "texture-wads/lq_greek/grk_mural2.png",
+          "bytes": 47510,
+          "sha256": "bf0e58f045996069ba9352c4e7f630d29bbc203d5ddb5039b3a28447a9c71532",
+          "texture_name": "grk_mural2",
+          "width": 192,
+          "height": 128
+        },
+        {
+          "path": "texture-wads/lq_greek/grk_plat1_side.png",
+          "bytes": 1939,
+          "sha256": "616ca26dae9bbecd186a7890c65ef245991befd3b17de063b5a9fe25c30fec75",
+          "texture_name": "grk_plat1_side",
+          "width": 64,
+          "height": 16
+        },
+        {
+          "path": "texture-wads/lq_greek/grk_plat1_top.png",
+          "bytes": 3688,
+          "sha256": "d2dfdb34fc12408ca63fe87db83f424d1c84248130fa06f5f4f127470e070b15",
+          "texture_name": "grk_plat1_top",
+          "width": 64,
+          "height": 64
+        },
+        {
+          "path": "texture-wads/lq_greek/grk_trim1.png",
+          "bytes": 8211,
+          "sha256": "4db7b15c5b936042f635d704dd9081382f5a32d7b537ca6309e6e264dda5c3ce",
+          "texture_name": "grk_trim1",
+          "width": 128,
+          "height": 128
+        },
+        {
+          "path": "texture-wads/lq_greek/grk_trim1_3.png",
+          "bytes": 8345,
+          "sha256": "d4c8af3179b760d8c2d499d1a991b2c7c5d344927cd1896db0535e2e5821162b",
+          "texture_name": "grk_trim1_3",
+          "width": 128,
+          "height": 128
+        },
+        {
+          "path": "texture-wads/lq_greek/grk_trim1_3_s.png",
+          "bytes": 2621,
+          "sha256": "eae4385eb860394402a8177be73268b98631c6785fe6115b4d8531dc1d10a2a9",
+          "texture_name": "grk_trim1_3_s",
+          "width": 64,
+          "height": 64
+        },
+        {
+          "path": "texture-wads/lq_greek/grk_trim1_5.png",
+          "bytes": 8930,
+          "sha256": "626a629edcfcd410ea7dbb36238b56b945653f25de4d04480ad3fb47439988fc",
+          "texture_name": "grk_trim1_5",
+          "width": 128,
+          "height": 128
+        },
+        {
+          "path": "texture-wads/lq_greek/grk_trim1_5_s.png",
+          "bytes": 3061,
+          "sha256": "9874d9fc3150f71bcc257dd5b8628cdb68c8204508c7be4b42b570a4425097fd",
+          "texture_name": "grk_trim1_5_s",
+          "width": 64,
+          "height": 64
+        },
+        {
+          "path": "texture-wads/lq_greek/grk_trim1_6_s.png",
+          "bytes": 3275,
+          "sha256": "657908206e61241d262aa08e5f14dca14348460575bc5f3afd0f7114a55e7ab6",
+          "texture_name": "grk_trim1_6_s",
+          "width": 64,
+          "height": 64
+        },
+        {
+          "path": "texture-wads/lq_greek/grk_trim1_7_s.png",
+          "bytes": 6077,
+          "sha256": "b3f9a53495f8f04dad44c97f1d61e254454b4a7e80218ba6eed2819a4f9e7ac8",
+          "texture_name": "grk_trim1_7_s",
+          "width": 64,
+          "height": 64
+        },
+        {
+          "path": "texture-wads/lq_greek/grk_trim2.png",
+          "bytes": 3631,
+          "sha256": "bc752539bfbd3dff81fe9b0f87a8079bdf60938b400dd763d0e0b6eeef027818",
+          "texture_name": "grk_trim2",
+          "width": 128,
+          "height": 32
+        },
+        {
+          "path": "texture-wads/lq_greek/grk_wall1.png",
+          "bytes": 4892,
+          "sha256": "9345fd713f05f0ca8a1c95a7dcd45dc60ad30e98e0154530871240e28cd326a8",
+          "texture_name": "grk_wall1",
+          "width": 64,
+          "height": 64
+        },
+        {
+          "path": "texture-wads/lq_greek/grk_wall2.png",
+          "bytes": 4514,
+          "sha256": "6c91f67993ae3a465e532b16908d0fbcf4eeadc5102d28a72f72e30d16008a6b",
+          "texture_name": "grk_wall2",
+          "width": 64,
+          "height": 64
+        },
+        {
+          "path": "texture-wads/lq_greek/grk_wall3.png",
+          "bytes": 19655,
+          "sha256": "b9cd7b78f504e5dc48a0f3c5c5bb39b64e1f617d04b77db4c05465130bf26fd0",
+          "texture_name": "grk_wall3",
+          "width": 128,
+          "height": 64
+        },
+        {
+          "path": "texture-wads/lq_greek/grk_wall3b.png",
+          "bytes": 61946,
+          "sha256": "1e80b73aa2e0197d6667cc0349424491167aca24c451dbd0e2e6f6a0aff4f05d",
+          "texture_name": "grk_wall3b",
+          "width": 256,
+          "height": 128
+        },
+        {
+          "path": "texture-wads/lq_legacy/gardgrass_1.png",
+          "bytes": 42368,
+          "sha256": "3ede23539d35d07289119799707762b2c798df2fe23d22d57c54e3ff56bda9d1",
+          "texture_name": "gardgrass_1",
+          "width": 128,
+          "height": 128
+        },
+        {
+          "path": "texture-wads/lq_legacy/med_ret_rock1.png",
+          "bytes": 7493,
+          "sha256": "e08bcb7e1086f058a470fe36e2fc25a584e3d9709bb649c8c73017b7191449e0",
+          "texture_name": "med_ret_rock1",
+          "width": 64,
+          "height": 64
+        },
+        {
+          "path": "texture-wads/lq_liquidsky/sky_star.png",
+          "bytes": 2656,
+          "sha256": "4ce37be083e0d89c6ec97d1a96f4ad7fc3f6d368fbdf4559d08269a65e511af1",
+          "texture_name": "sky_star",
+          "width": 256,
+          "height": 128
+        },
+        {
+          "path": "texture-wads/lq_medieval/med_csl_flr1_1.png",
+          "bytes": 18595,
+          "sha256": "5fadc8bc5629ffa85f0f8e43cb3746a740c87b8a26c97afad8e1f960ec7c6408",
+          "texture_name": "med_csl_flr1_1",
+          "width": 128,
+          "height": 128
+        },
+        {
+          "path": "texture-wads/lq_medieval/med_csl_trm1.png",
+          "bytes": 2101,
+          "sha256": "82a1acb872a2300c6de0df0a9f391350fa9fd575ebc72d89b89829b7c186540c",
+          "texture_name": "med_csl_trm1",
+          "width": 64,
+          "height": 32
+        },
+        {
+          "path": "texture-wads/lq_medieval/med_ebrick3.png",
+          "bytes": 24611,
+          "sha256": "0557523c77f746f01297c151432d54456e0c9b69748592b2f3d276fa8f4e03da",
+          "texture_name": "med_ebrick3",
+          "width": 128,
+          "height": 128
+        },
+        {
+          "path": "texture-wads/lq_medieval/med_trim3_3.png",
+          "bytes": 8013,
+          "sha256": "985b2dc33f2644731bf4d1e91c4a411209fef439a981c1e375c1191bd819c7d3",
+          "texture_name": "med_trim3_3",
+          "width": 128,
+          "height": 32
+        },
+        {
+          "path": "texture-wads/lq_palette/flat_01_a.png",
+          "bytes": 4770,
+          "sha256": "0d6c0937d7249f06704344d9181063f5a99c898867ea764a42b7e7ab146b70df",
+          "texture_name": "flat_01_a",
+          "width": 16,
+          "height": 16
+        },
+        {
+          "path": "texture-wads/lq_props/qr.png",
+          "bytes": 5153,
+          "sha256": "2cd4341bef86a963cf12803bb2d4685fd838f95f5c9b3b9bedc067ec419e102d",
+          "texture_name": "qr",
+          "width": 96,
+          "height": 96
+        },
+        {
+          "path": "texture-wads/lq_terra/med_flat16.png",
+          "bytes": 25309,
+          "sha256": "4311d8adebe1ed26fbc350d2b2e5ab2891c0aee9522b37934db88f53d4c25071",
+          "texture_name": "med_flat16",
+          "width": 128,
+          "height": 128
+        },
+        {
+          "path": "texture-wads/lq_terra/med_rock5.png",
+          "bytes": 24813,
+          "sha256": "8577bf546ac5f4b31d1d00e3ee9d458946977d64c9ba27ec09ee5775b89d6b97",
+          "texture_name": "med_rock5",
+          "width": 128,
+          "height": 128
+        },
+        {
+          "path": "texture-wads/lq_wood/med_wood_riv1c.png",
+          "bytes": 7323,
+          "sha256": "a197f3a5fda422fe83db83293b1c8b071c45f17393cbf1792ffa97a5a487a507",
+          "texture_name": "med_wood_riv1c",
+          "width": 128,
+          "height": 128
+        }
+      ]
+    }
+  ]
+}

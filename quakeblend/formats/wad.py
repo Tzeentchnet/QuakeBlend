@@ -10,7 +10,7 @@ Layout (little-endian):
         int32   offset
         int32   dsize        (compressed size)
         int32   size         (uncompressed size; equal to dsize for type 0x44)
-        int8    type         (0x44 = miptex for both WAD2/WAD3)
+        int8    type         (0x44 = WAD2 miptex; 0x43 = WAD3 miptex)
         int8    compression  (0 for Quake)
         int16   padding
         char[16] name (null-padded ASCII, lowercased by convention)
@@ -37,7 +37,7 @@ from typing import BinaryIO
 
 from ..utils.constants import (
     MAX_TEXTURE_DIMENSION, MAX_TEXTURE_PIXELS,
-    WAD2_MAGIC, WAD3_MAGIC, WAD_TYPE_MIPTEX,
+    WAD2_MAGIC, WAD3_MAGIC, WAD_TYPE_MIPTEX, WAD3_TYPE_MIPTEX,
 )
 from .common import BinaryReader, read_exact
 
@@ -197,6 +197,7 @@ def read_wad(stream: BinaryIO) -> Wad:
     entries = _read_directory(r, numentries)
 
     textures: list[MipTexture] = []
+    miptex_type = WAD3_TYPE_MIPTEX if flavour == "WAD3" else WAD_TYPE_MIPTEX
     for entry in entries:
         if entry.offset < 0 or entry.disk_size < 0 or entry.size < 0:
             raise ValueError(
@@ -208,7 +209,7 @@ def read_wad(stream: BinaryIO) -> Wad:
                 f"WAD entry {entry.name!r} exceeds file bounds: "
                 f"offset={entry.offset}, size={entry.disk_size}, file_size={file_size}"
             )
-        if entry.type != WAD_TYPE_MIPTEX:
+        if entry.type != miptex_type:
             continue
         if entry.compression != 0:
             raise ValueError(

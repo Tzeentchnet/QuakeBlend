@@ -49,10 +49,45 @@ jobs:
               throw "Extension archive is missing $entry"
             }
           }
-          $forbidden = Get-ChildItem $expanded -Recurse -Force | Where-Object {
-            $_.Name -eq "__pycache__" -or $_.Extension -eq ".pyc"
+          $expectedTopLevel = @(
+            "LICENSE",
+            "__init__.py",
+            "blender",
+            "blender_manifest.toml",
+            "data",
+            "formats",
+            "utils"
+          )
+          $unexpectedTopLevel = Get-ChildItem $expanded -Force | Where-Object {
+            $_.Name -notin $expectedTopLevel
           }
-          if ($forbidden) { throw "Extension archive contains Python cache files" }
+          if ($unexpectedTopLevel) {
+            throw "Extension archive contains unexpected top-level content: $($unexpectedTopLevel.Name -join ', ')"
+          }
+          $sourceOnlyNames = @(
+            ".github",
+            ".private",
+            ".pytest_cache",
+            ".ruff_cache",
+            ".venv",
+            "LICENSES",
+            "docs",
+            "env",
+            "htmlcov",
+            "scripts",
+            "tests",
+            "venv"
+          )
+          $forbidden = Get-ChildItem $expanded -Recurse -Force | Where-Object {
+            $_.Name -in $sourceOnlyNames -or
+            $_.Name -eq "__pycache__" -or
+            $_.Name -like "*.egg-info" -or
+            $_.Name -in @(".coverage", "README.md", "THIRD_PARTY_NOTICES.md") -or
+            $_.Extension -eq ".pyc"
+          }
+          if ($forbidden) {
+            throw "Extension archive contains source-only or generated content: $($forbidden.FullName -join ', ')"
+          }
 
       - uses: actions/upload-artifact@v4
         with:

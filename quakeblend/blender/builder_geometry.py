@@ -31,13 +31,13 @@ def _new_mesh_object(name: str, collection: bpy.types.Collection) -> bpy.types.O
 def build_map_brush(brush: MapBrush, faces: Sequence[BrushFace], name: str,
                     collection: bpy.types.Collection,
                     materials: builder_materials.MaterialCache,
-                    *, scale: float) -> bpy.types.Object | None:
+                    *, scale: float, create_materials: bool = True) -> bpy.types.Object | None:
     """Build a Blender object for one CSG brush.
 
     ``faces`` are the polygons produced by :func:`quakeblend.formats.csg.brush_faces`
     in the same order as ``brush.faces``.
     """
-    valid = [f for f in faces if len(f.vertices) >= 3]
+    valid = [(index, face) for index, face in enumerate(faces) if len(face.vertices) >= 3]
     if not valid:
         return None
 
@@ -46,8 +46,8 @@ def build_map_brush(brush: MapBrush, faces: Sequence[BrushFace], name: str,
 
     # Material slots (preserve order; first occurrence wins).
     slot_index: dict[str, int] = {}
-    for face in valid:
-        if face.texture and face.texture not in slot_index:
+    for _, face in valid:
+        if create_materials and face.texture and face.texture not in slot_index:
             slot_index[face.texture] = len(slot_index)
             mat = materials.get(face.texture)
             if mat is not None:
@@ -62,8 +62,11 @@ def build_map_brush(brush: MapBrush, faces: Sequence[BrushFace], name: str,
                 slot_index[face.texture] = len(obj.data.materials) - 1
 
     uv_layer = bm.loops.layers.uv.new("UVMap")
+    source_layer = bm.faces.layers.int.new("qb_source_face")
+    width_layer = bm.faces.layers.int.new("qb_texture_width")
+    height_layer = bm.faces.layers.int.new("qb_texture_height")
     bm_vertex_by_position = {}
-    for face in valid:
+    for source_index, face in valid:
         bm_verts = []
         for vertex in face.vertices:
             position = (vertex.x * scale, vertex.y * scale, vertex.z * scale)
@@ -77,6 +80,9 @@ def build_map_brush(brush: MapBrush, faces: Sequence[BrushFace], name: str,
         except ValueError:
             # Duplicate face — possible on coplanar brush parts; skip.
             continue
+        bm_face[source_layer] = source_index
+        dimensions = (face.metadata or {}).get("tex_size", (64, 64))
+        bm_face[width_layer], bm_face[height_layer] = dimensions
         if face.texture and face.texture in slot_index:
             bm_face.material_index = slot_index[face.texture]
         # UVs (Standard or Valve220 — see _project_uv below).
@@ -135,7 +141,8 @@ def build_bsp_geometry(name: str, vertices: Sequence[Vec3],
                        face_uvs: Iterable[Sequence[tuple[float, float]]],
                        collection: bpy.types.Collection,
                        material_list: Sequence[bpy.types.Material],
-                       *, scale: float) -> bpy.types.Object:
+                       *, scale: float, corner_channels=None,
+                       source_faces=None, shader_indices=None) -> bpy.types.Object:
     """Build a single mesh from BSP-style face data."""
     obj = _new_mesh_object(name, collection)
     for mat in material_list:
@@ -146,11 +153,24 @@ def build_bsp_geometry(name: str, vertices: Sequence[Vec3],
     bm.verts.ensure_lookup_table()
 
     uv_layer = bm.loops.layers.uv.new("UVMap")
+    light_layer = bm.loops.layers.uv.new("Q3Lightmap") if corner_channels is not None else None
+    color_layer = bm.loops.layers.float_color.new("qb_q3_color") if corner_channels is not None else None
+    normal_layer = bm.loops.layers.float_vector.new("qb_q3_normal") if corner_channels is not None else None
+    source_layer = bm.faces.layers.int.new("qb_q3_source_face") if source_faces is not None else None
+    shader_layer = bm.faces.layers.int.new("qb_q3_shader_index") if shader_indices is not None else None
 
     polys = list(face_polygons)
     mats = list(face_materials)
     uvs = list(face_uvs)
-    for poly_indices, mat_idx, poly_uvs in zip(polys, mats, uvs):
+    for face_index, (poly_indices, mat_idx, poly_uvs) in enumerate(zip(polys, mats, uvs)):
+        channels = corner_channels[face_index] if corner_channels is not None else None
+        if channels and len(poly_indices) >= 3:
+            first, second, third = (vertices[index] for index in poly_indices[:3])
+            source_normal = Vec3(*channels[0][6:9])
+            if (second - first).cross(third - first).dot(source_normal) < 0:
+                poly_indices = list(reversed(poly_indices))
+                poly_uvs = list(reversed(poly_uvs))
+                channels = list(reversed(channels))
         if len(poly_indices) < 3:
             continue
         try:
@@ -159,11 +179,24 @@ def build_bsp_geometry(name: str, vertices: Sequence[Vec3],
             continue
         if 0 <= mat_idx < len(material_list):
             face.material_index = mat_idx
+        if source_layer is not None:
+            face[source_layer] = source_faces[face_index]
+        if shader_layer is not None:
+            face[shader_layer] = shader_indices[face_index]
         for loop, uv in zip(face.loops, poly_uvs):
             loop[uv_layer].uv = uv
+        if corner_channels is not None:
+            for loop, values in zip(face.loops, channels):
+                loop[light_layer].uv = values[:2]
+                loop[color_layer] = values[2:6]
+                length = math.sqrt(sum(value * value for value in values[6:9]))
+                loop[normal_layer] = tuple(value / length for value in values[6:9]) if length else (0, 0, 1)
 
     bm.normal_update()
     bm.to_mesh(obj.data)
     bm.free()
     obj.data.update()
+    if corner_channels is not None:
+        obj.data.uv_layers.active_index = 0
+        obj.data.normals_split_custom_set([tuple(item.vector) for item in obj.data.attributes["qb_q3_normal"].data])
     return obj

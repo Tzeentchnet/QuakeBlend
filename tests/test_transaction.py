@@ -26,6 +26,8 @@ class _FakeData:
         self.images = []
         self.lights = []
         self.cameras = []
+        self.node_groups = []
+        self.actions = []
         self.removed: list[_FakeId] = []
 
     def batch_remove(self, *, ids: list[_FakeId]) -> None:
@@ -55,11 +57,15 @@ def test_import_transaction_removes_only_created_ids_on_failure(monkeypatch) -> 
     transaction = _load_transaction(monkeypatch, data)
     created_object = _FakeId(2)
     created_material = _FakeId(3)
+    created_group = _FakeId(4)
+    created_action = _FakeId(5)
 
     with pytest.raises(RuntimeError, match="failed"):
         with transaction.ImportTransaction():
             data.objects.append(created_object)
             data.materials.append(created_material)
+            data.node_groups.append(created_group)
+            data.actions.append(created_action)
             raise RuntimeError("failed")
 
-    assert data.removed == [created_object, created_material]
+    assert data.removed == [created_object, created_material, created_group, created_action]

@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import argparse
 import importlib
+import math
 import struct
 import sys
 import tempfile
 from pathlib import Path
 
 import bpy
+from mathutils import Vector
 
 
 _Q1_MAP = """
@@ -480,24 +482,184 @@ def _write_q1_submodel_bsp(path: Path) -> None:
     )
 
 
-def _write_wad(path: Path, texture: str = "QB_WAD_SMOKE") -> None:
+def _write_ibsp_submodels(path: Path, *, version: int) -> None:
+    entities = (
+        b'{ "classname" "worldspawn" }\n'
+        b'{ "classname" "func_door" "model" "*1" }\n'
+        b'{ "classname" "info_player_start" "origin" "0 0 24" }\n'
+        b'{ "classname" "light" "origin" "0 0 48" }\n\x00'
+    )
+    positions = [(0, 0, 0), (64, 0, 0), (0, 64, 0),
+                 (0, 0, 64), (64, 0, 64), (0, 64, 64)]
+    if version == 38:
+        texture = "QB_FILTER_TEXTURE"
+        wal_path = path.parent / f"{texture}.wal"
+        wal_path.write_bytes(
+            texture.encode("ascii").ljust(32, b"\x00")
+            + struct.pack("<6I", 32, 16, 100, 612, 740, 772)
+            + bytes(32) + struct.pack("<3I", 0, 0, 0) + bytes(680)
+        )
+        lumps = {
+            0: entities,
+            2: b"".join(struct.pack("<3f", *position) for position in positions),
+            5: (struct.pack("<8fii", 1, 0, 0, 0, 0, 1, 0, 0, 0, 0)
+                + texture.encode("ascii").ljust(32, b"\x00") + struct.pack("<i", -1)),
+            6: b"".join(struct.pack("<HHiHH4Bi", 0, 0, first_edge, 3, 0, 0, 0, 0, 0, -1)
+                        for first_edge in (0, 3)),
+            11: b"".join(struct.pack("<2H", *edge) for edge in
+                         ((0, 0), (0, 1), (1, 2), (2, 0), (3, 4), (4, 5), (5, 3))),
+            12: struct.pack("<6i", 1, 2, 3, 4, 5, 6),
+            13: b"".join(struct.pack("<9f3i", 0, 0, 0, 64, 64, 64, 0, 0, 0, 0, first_face, 1)
+                         for first_face in (0, 1)),
+        }
+        lump_count = 19
+    else:
+        positions.extend((column * 32, row * 32, 128)
+                         for row in range(3) for column in range(3))
+        faces = b"".join(
+            struct.pack("<12i12f2i", 0, -1, face_type, first_vertex, vertex_count,
+                        0, 0, -1, 0, 0, 0, 0,
+                        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, width, height)
+            for face_type, first_vertex, vertex_count, width, height in (
+                (1, 0, 3, 0, 0), (1, 3, 3, 0, 0), (2, 6, 9, 3, 3),
+            )
+        )
+        lumps = {
+            0: entities,
+            1: b"QB_FILTER_TEXTURE".ljust(64, b"\x00") + struct.pack("<2i", 0, 0),
+            7: b"".join(struct.pack("<6f4i", 0, 0, 0, 64, 64, 128, first_face, count, 0, 0)
+                        for first_face, count in ((0, 1), (1, 2))),
+            10: b"".join(struct.pack("<10f4B", *position, position[0] / 64, position[1] / 64,
+                                    0, 0, 0, 0, 1, 255, 255, 255, 255)
+                         for position in positions),
+            13: faces,
+        }
+        lump_count = 17
+    header_size = 8 + lump_count * 8
+    cursor = header_size
+    header = [b"IBSP", struct.pack("<i", version)]
+    for index in range(lump_count):
+        blob = lumps.get(index, b"")
+        header.append(struct.pack("<ii", cursor, len(blob)))
+        cursor += len(blob)
+    path.write_bytes(b"".join(header) + b"".join(lumps.get(index, b"") for index in range(lump_count)))
+
+
+def _check_bsp_import_controls(directory: Path) -> None:
+    for version in (29, 38, 46):
+        for create_materials in (False, True):
+            for import_brush_entities in (False, True):
+                path = directory / f"controls_{version}_{create_materials}_{import_brush_entities}.bsp"
+                if version == 29:
+                    _write_q1_submodel_bsp(path)
+                else:
+                    _write_ibsp_submodels(path, version=version)
+                before = (len(bpy.data.materials), len(bpy.data.images))
+                assert bpy.ops.quakeblend.import_bsp(
+                    filepath=str(path), texture_root=str(directory), scale=0.03125,
+                    create_materials=create_materials,
+                    import_brush_entities=import_brush_entities,
+                    import_entities=True, import_lights=True, import_cameras=True,
+                    patch_level=2,
+                ) == {"FINISHED"}
+                root = bpy.data.collections[path.stem]
+                meshes = [obj for obj in root.all_objects if obj.type == "MESH"]
+                expected_count = (3 if version == 46 else 2) if import_brush_entities else 1
+                assert len(meshes) == expected_count
+                assert {obj["qb_bsp_model_index"] for obj in meshes} == (
+                    {0, 1} if import_brush_entities else {0}
+                )
+                if not create_materials:
+                    assert before == (len(bpy.data.materials), len(bpy.data.images))
+                    assert all(len(obj.data.materials) == 0 for obj in meshes)
+                else:
+                    assert all(len(obj.data.materials) > 0 for obj in meshes)
+                assert all(obj.data.uv_layers.active is not None for obj in meshes)
+                if version == 38:
+                    world = next(obj for obj in meshes if obj["qb_bsp_model_index"] == 0)
+                    uvs = {tuple(round(value, 6) for value in loop.uv)
+                           for loop in world.data.uv_layers.active.data}
+                    assert uvs == {(0.0, 1.0), (2.0, 1.0), (0.0, -3.0)}
+                if version != 29:
+                    assert len([obj for obj in root.all_objects if obj.type == "CAMERA"]) == 1
+                    assert len([obj for obj in root.all_objects if obj.type == "LIGHT"]) == 1
+
+
+def _write_wad(path: Path, texture: str = "QB_WAD_SMOKE", *,
+               wad3: bool = False, pixel: int = 1,
+               color: tuple[int, int, int] = (51, 102, 153)) -> None:
     texture_name = texture.encode("ascii").ljust(16, b"\x00")
     payload = (
         texture_name
-        + struct.pack("<II", 1, 1)
-        + struct.pack("<IIII", 40, 41, 42, 43)
-        + bytes((1, 2, 3, 4))
+        + struct.pack("<II", 8, 8)
+        + struct.pack("<IIII", 40, 104, 120, 124)
+        + bytes((pixel,)) * 85
     )
+    if wad3:
+        payload += struct.pack("<H", 256) + bytes(color) * 256
     entry_offset = 12
     directory_offset = entry_offset + len(payload)
     directory = (
         struct.pack("<iii", entry_offset, len(payload), len(payload))
-        + bytes((0x44, 0, 0, 0))
+        + bytes((0x43 if wad3 else 0x44, 0, 0, 0))
         + texture_name
     )
     path.write_bytes(
-        b"WAD2" + struct.pack("<ii", 1, directory_offset) + payload + directory
+        (b"WAD3" if wad3 else b"WAD2")
+        + struct.pack("<ii", 1, directory_offset) + payload + directory
     )
+
+
+def _check_wad3_palettes(directory: Path) -> None:
+    for wad3 in (False, True):
+        name = "QB_WAD3_COLOR" if wad3 else "QB_WAD2_GLOW"
+        path = directory / f"{name}.wad"
+        _write_wad(path, texture=name, wad3=wad3, pixel=224)
+        assert bpy.ops.quakeblend.import_wad(
+            filepath=str(path), create_materials=True,
+        ) == {"FINISHED"}
+        material = next(mat for mat in bpy.data.materials if mat.name == name)
+        images = [node.image for node in material.node_tree.nodes
+                  if node.type == "TEX_IMAGE"]
+        assert len(images) == (1 if wad3 else 2)
+        if wad3:
+            assert tuple(round(value, 6) for value in images[0].pixels[:4]) == (
+                0.2, 0.4, 0.6, 1.0,
+            )
+
+    path = directory / "masked_wad3.wad"
+    _write_wad(path, texture="{QB_WAD3_MASK", wad3=True, pixel=255)
+    assert bpy.ops.quakeblend.import_wad(
+        filepath=str(path), create_materials=True,
+    ) == {"FINISHED"}
+    material = bpy.data.materials["{QB_WAD3_MASK"]
+    image = next(node.image for node in material.node_tree.nodes
+                 if node.type == "TEX_IMAGE")
+    assert image.pixels[3] == 0.0
+    bsdf = next(node for node in material.node_tree.nodes
+                if node.type == "BSDF_PRINCIPLED")
+    assert bsdf.inputs["Alpha"].is_linked
+
+    wad_path = directory / "map_wad3.wad"
+    _write_wad(wad_path, texture="QB_WAD3_MAP", wad3=True, pixel=254)
+    map_path = directory / "map_wad3.map"
+    map_path.write_text(_Q1_MAP.replace("SMOKE", "QB_WAD3_MAP"), encoding="ascii")
+    assert bpy.ops.quakeblend.import_map(
+        filepath=str(map_path), wad_paths=str(wad_path),
+        source_game="Q1", import_entities=False,
+    ) == {"FINISHED"}
+    root = _source_roots(map_path)[0]
+    brushes = [obj for obj in _objects_below(root) if obj.type == "MESH"]
+    assert brushes
+    for brush in brushes:
+        for material in brush.data.materials:
+            assert not material.get("qb_placeholder", False)
+            images = [node.image for node in material.node_tree.nodes
+                      if node.type == "TEX_IMAGE"]
+            assert len(images) == 1
+            assert tuple(round(value, 6) for value in images[0].pixels[:4]) == (
+                0.2, 0.4, 0.6, 1.0,
+            )
 
 
 def _check_texture_case_and_face_flags(directory: Path) -> None:
@@ -639,6 +801,447 @@ def _check_bsp_and_wad_workflows(directory: Path) -> None:
     )
 
 
+def _check_cameras(extension_root: str, directory: Path) -> None:
+    builder = importlib.import_module(f"{extension_root}.blender.builder_entities")
+    collection = bpy.data.collections.new("QB Camera Checks")
+    bpy.context.scene.collection.children.link(collection)
+    previous_camera = bpy.context.scene.camera
+    cases = (
+        ({"angle": "0"}, (1, 0, 0), (0, 0, 1)),
+        ({"angle": "90"}, (0, 1, 0), (0, 0, 1)),
+        ({"mangle": "30 90 0"}, (0, math.sqrt(3) / 2, -0.5), (0, 0.5, math.sqrt(3) / 2)),
+        ({"mangle": "0 0 90"}, (1, 0, 0), (0, -1, 0)),
+        ({"mangle": "bad", "angle": "90"}, (0, 1, 0), (0, 0, 1)),
+        ({"mangle": "nan 0 0", "angle": "inf"}, (1, 0, 0), (0, 0, 1)),
+    )
+    for angles, forward, up in cases:
+        entity = {"classname": "info_intermission", "origin": "8 16 24", **angles}
+        obj = builder.build_entity(entity, collection, scale=0.125)
+        assert obj is not None and obj.type == "CAMERA"
+        rotation = obj.rotation_euler.to_matrix()
+        assert (rotation @ Vector((0, 0, -1)) - Vector(forward)).length < 1e-5
+        assert (rotation @ Vector((0, 1, 0)) - Vector(up)).length < 1e-5
+        assert abs(obj.data.angle_x - math.pi / 2) < 1e-5
+        assert tuple(obj.location) == (1.0, 2.0, 3.0)
+        assert obj["qb_prop_classname"] == "info_intermission"
+    assert bpy.context.scene.camera == previous_camera
+
+    map_path = directory / "no_cameras.map"
+    map_path.write_text(_Q1_MAP, encoding="ascii")
+    assert bpy.ops.quakeblend.import_map(
+        filepath=str(map_path), wad_paths=";", import_entities=True,
+        import_cameras=False,
+    ) == {"FINISHED"}
+    root = _source_roots(map_path)[0]
+    assert any(obj.type == "MESH" for obj in _objects_below(root))
+    assert not any(obj.get("qb_prop_classname") == "info_player_start"
+                   for obj in _objects_below(root))
+
+    runner = importlib.import_module(f"{extension_root}.blender.import_runner_bsp")
+    operator = type("CameraOptions", (), {"import_cameras": False})()
+    entities = [
+        {"classname": "info_player_start", "origin": "0 0 0"},
+        {"classname": "light", "origin": "0 0 0"},
+        {"classname": "info_null", "origin": "0 0 0"},
+    ]
+    root = bpy.data.collections.new("QB BSP Camera Filter")
+    runner._build_bsp_entities(operator, entities, root, "camera_filter", scale=0.125)
+    assert sorted(obj.type for obj in root.all_objects) == ["EMPTY", "LIGHT"]
+
+
+def _write_goldsrc_bsp(path: Path, *, color: tuple[int, int, int] = (51, 102, 153),
+                       origin: str = "128 64 32", extra_entities: str = "") -> None:
+    entities = (
+        '{ "classname" "worldspawn" "wad" "untrusted.wad" }\n'
+        '{ "classname" "func_door" "model" "*1" "origin" "' + origin + '" }\n'
+        '{ "classname" "light" "origin" "8 16 24" "_light" "255 128 0 200" }\n'
+        '{ "classname" "light_spot" "origin" "0 0 16" "_light" "255 255 255 100" }\n'
+        '{ "classname" "info_player_start" "origin" "0 0 24" "angles" "0 90 0" }\n'
+        '{ "classname" "info_landmark" "origin" "0 0 0" "targetname" "entry" }\n'
+        + extra_entities + '\x00'
+    ).encode("ascii")
+    payloads = [
+        (b"{QB_GOLD_EMBED".ljust(16, b"\x00") + struct.pack("<2I4I", 8, 8, 40, 104, 120, 124)
+         + bytes((224, 255)) * 32 + bytes((224,)) * 21
+         + struct.pack("<H", 256) + bytes(color) * 256),
+        b"QB_GOLD_WAD".ljust(16, b"\x00") + struct.pack("<2I4I", 16, 32, 0, 0, 0, 0),
+        b"{QB_GOLD_IMAGE".ljust(16, b"\x00") + struct.pack("<2I4I", 32, 16, 0, 0, 0, 0),
+        None,
+        b"../outside_gold".ljust(16, b"\x00") + struct.pack("<2I4I", 8, 8, 0, 0, 0, 0),
+    ]
+    cursor = 4 + len(payloads) * 4
+    offsets = []
+    for payload in payloads:
+        offsets.append(cursor if payload is not None else -1)
+        cursor += len(payload) if payload is not None else 0
+    miptextures = (struct.pack("<i", len(payloads))
+                   + b"".join(struct.pack("<i", offset) for offset in offsets)
+                   + b"".join(payload for payload in payloads if payload is not None))
+    face_textures = (0, 1, 2, 3, 4, 1)
+    vertices = b"".join(struct.pack("<3f", horizontal, vertical, face_index * 8)
+                        for face_index in range(6)
+                        for horizontal, vertical in ((0, 0), (64, 0), (64, 64), (0, 64)))
+    edges = struct.pack("<2H", 0, 0) + b"".join(
+        struct.pack("<2H", face_index * 4 + corner, face_index * 4 + (corner + 1) % 4)
+        for face_index in range(6) for corner in range(4)
+    )
+    lumps = {
+        0: entities, 2: miptextures, 3: vertices,
+        6: b"".join(struct.pack("<8f2I", 1, 0, 0, 0, 0, 1, 0, 0, texture_index, 0)
+                    for texture_index in range(5)),
+        7: b"".join(struct.pack("<HHiHH4Bi", 0, 0, index * 4, 4, texture_index, 0, 255, 255, 255, -1)
+                    for index, texture_index in enumerate(face_textures)),
+        12: edges,
+        13: b"".join(struct.pack("<i", index) for index in range(1, 25)),
+        14: b"".join(struct.pack("<9f7i", 0, 0, 0, 64, 64, 64,
+                     *( (128, 64, 32) if first_face else (0, 0, 0) ),
+                                 0, 0, 0, 0, 0, first_face, count)
+                     for first_face, count in ((0, 5), (5, 1))),
+    }
+    cursor = 124
+    header = [struct.pack("<i", 30)]
+    for index in range(15):
+        blob = lumps.get(index, b"")
+        header.append(struct.pack("<2i", cursor, len(blob)))
+        cursor += len(blob)
+    path.write_bytes(b"".join(header) + b"".join(lumps.get(index, b"") for index in range(15)))
+
+
+def _check_goldsrc(directory: Path) -> None:
+    texture_root = directory / "goldsrc_textures"
+    texture_root.mkdir()
+    for path in (texture_root / "{QB_GOLD_IMAGE.png", directory / "outside_gold.png"):
+        image = bpy.data.images.new("GoldSrc fixture image", 8, 8, alpha=True)
+        image.pixels = [0.2, 0.4, 0.6, 0.0] * 64
+        image.filepath_raw = str(path)
+        image.file_format = "PNG"
+        image.save()
+        bpy.data.images.remove(image)
+    first_wad = directory / "gold_first.wad"
+    second_wad = directory / "gold_second.wad"
+    embedded_wad = directory / "gold_embedded_conflict.wad"
+    _write_wad(first_wad, texture="qb_gold_wad", wad3=True, pixel=224, color=(102, 51, 153))
+    _write_wad(second_wad, texture="QB_GOLD_WAD", wad3=True, pixel=224, color=(255, 0, 0))
+    _write_wad(embedded_wad, texture="{QB_GOLD_EMBED", wad3=True, pixel=224, color=(255, 0, 0))
+    wad_paths = ";".join(str(path) for path in (first_wad, second_wad, embedded_wad))
+
+    def import_level(path: Path, **options) -> bpy.types.Collection:
+        assert bpy.ops.quakeblend.import_bsp(
+            filepath=str(path), texture_root=str(texture_root), wad_paths=wad_paths,
+            scale=0.03125, **options,
+        ) == {"FINISHED"}
+        return bpy.data.collections[path.stem]
+
+    path = directory / "goldsrc.bsp"
+    _write_goldsrc_bsp(path)
+    root = import_level(path)
+    assert root["qb_source_game"] == "goldsrc"
+    assert root["qb_source_bsp"] == str(path.resolve())
+    assert "qb_source_map" not in root
+    assert "info_landmark" in root["qb_bsp_entities"]
+    meshes = [obj for obj in root.all_objects if obj.type == "MESH"]
+    assert len(meshes) == 2
+    world = next(obj for obj in meshes if obj["qb_bsp_model_index"] == 0)
+    brush = next(obj for obj in meshes if obj["qb_bsp_model_index"] == 1)
+    assert tuple(brush.location) == (4.0, 2.0, 1.0)
+    bpy.context.view_layer.update()
+    assert tuple(brush.matrix_world @ brush.data.vertices[0].co) == (4.0, 2.0, 2.25)
+    assert len([obj for obj in root.all_objects if obj.get("qb_prop_classname") == "func_door"]) == 1
+
+    def face_material(face_index: int) -> bpy.types.Material:
+        return world.data.materials[world.data.polygons[face_index].material_index]
+
+    for face_index, expected in ((0, (0.2, 0.4, 0.6, 1.0)), (1, (0.4, 0.2, 0.6, 1.0))):
+        material = face_material(face_index)
+        images = [node.image for node in material.node_tree.nodes if node.type == "TEX_IMAGE"]
+        assert len(images) == 1
+        assert tuple(round(value, 6) for value in images[0].pixels[:4]) == expected
+        if face_index == 0:
+            assert images[0].pixels[7] == 0.0
+    image_material = face_material(2)
+    image = next(node.image for node in image_material.node_tree.nodes if node.type == "TEX_IMAGE")
+    assert image.pixels[3] == 0.0
+    bsdf = next(node for node in image_material.node_tree.nodes if node.type == "BSDF_PRINCIPLED")
+    assert bsdf.inputs["Alpha"].is_linked
+    assert face_material(3)["qb_placeholder"]
+    assert face_material(4)["qb_placeholder"]
+    for face_index, expected_uv in (
+        (1, {(0.0, 1.0), (4.0, 1.0), (4.0, -1.0), (0.0, -1.0)}),
+        (2, {(0.0, 1.0), (2.0, 1.0), (2.0, -3.0), (0.0, -3.0)}),
+    ):
+        polygon = world.data.polygons[face_index]
+        assert {tuple(world.data.uv_layers.active.data[index].uv)
+                for index in polygon.loop_indices} == expected_uv
+    lights = [obj for obj in root.all_objects if obj.type == "LIGHT"]
+    assert len(lights) == 1
+    assert abs(lights[0].data.energy - 200 * 4 * math.pi * 0.03125 ** 2) < 1e-5
+    assert abs(lights[0].data.color[1] - 128 / 255) < 1e-6
+    assert next(obj for obj in root.all_objects if obj.get("qb_prop_classname") == "light_spot").type == "EMPTY"
+    camera = next(obj for obj in root.all_objects if obj.type == "CAMERA")
+    assert (camera.rotation_euler.to_matrix() @ Vector((0, 0, -1)) - Vector((0, 1, 0))).length < 1e-5
+
+    second_path = directory / "goldsrc_second.bsp"
+    _write_goldsrc_bsp(second_path, color=(255, 0, 0))
+    second_root = import_level(second_path)
+    second_world = next(obj for obj in second_root.all_objects if obj.get("qb_bsp_model_index") == 0)
+    second_material = second_world.data.materials[second_world.data.polygons[0].material_index]
+    assert second_material != face_material(0)
+    assert second_root["qb_import_id"] != root["qb_import_id"]
+
+    bare_path = directory / "goldsrc_bare.bsp"
+    _write_goldsrc_bsp(bare_path)
+    before = (len(bpy.data.images), len(bpy.data.materials))
+    bare_root = import_level(bare_path, create_materials=False, import_brush_entities=False,
+                             import_entities=False)
+    assert before == (len(bpy.data.images), len(bpy.data.materials))
+    bare_meshes = [obj for obj in bare_root.all_objects if obj.type == "MESH"]
+    assert len(bare_meshes) == 1
+    assert bare_meshes[0]["qb_bsp_model_index"] == 0
+    assert len(bare_root.all_objects) == 2
+    assert "info_landmark" in bare_root["qb_bsp_entities"]
+
+    failed_path = directory / "goldsrc_failed.bsp"
+    _write_goldsrc_bsp(failed_path, origin="nan 0 0")
+    categories = ("objects", "collections", "meshes", "materials", "images", "lights", "cameras")
+    before = {category: {item.as_pointer() for item in getattr(bpy.data, category)} for category in categories}
+    try:
+        result = bpy.ops.quakeblend.import_bsp(filepath=str(failed_path), wad_paths=wad_paths,
+                                               texture_root=str(texture_root))
+    except RuntimeError as exc:
+        assert "finite" in str(exc)
+        result = {"CANCELLED"}
+    assert result == {"CANCELLED"}
+    assert before == {category: {item.as_pointer() for item in getattr(bpy.data, category)}
+                      for category in categories}
+
+
+def _check_goldsrc_stitching(extension_root: str, directory: Path) -> None:
+    from types import SimpleNamespace
+
+    assembly = importlib.import_module(f"{extension_root}.blender.map_assembly")
+    messages = []
+    operator = SimpleNamespace(stitch_target="AUTO", report=lambda _levels, message: messages.append(message))
+
+    def import_map(name, origin, destination="", **options):
+        path = directory / f"{name}.bsp"
+        extra = f'{{ "classname" "info_landmark" "targetname" "join" "origin" "{origin}" }}\n'
+        if destination:
+            extra += f'{{ "classname" "trigger_changelevel" "map" "{destination}" "landmark" "join" }}\n'
+        _write_goldsrc_bsp(path, extra_entities=extra)
+        before = {collection.as_pointer() for collection in bpy.data.collections}
+        assert bpy.ops.quakeblend.import_bsp(filepath=str(path), create_materials=False,
+                                             **options) == {"FINISHED"}
+        return next(collection for collection in bpy.data.collections
+                    if collection.as_pointer() not in before and collection.get("qb_source_bsp"))
+
+    target = import_map("stitch_old", "64 0 0", import_entities=False)
+    target_root = assembly.assembly_root(target)
+    target_root.location = (10, 20, 30)
+    target.name = "Renamed collection does not affect map identity"
+    source = import_map("stitch_new", "16 0 0", "stitch_old", stitch_goldsrc=True)
+    source_root = assembly.assembly_root(source)
+    assert tuple(source_root.location) == (11.5, 20, 30)
+    assert tuple(target_root.location) == (10, 20, 30)
+    for obj in source.all_objects:
+        if obj != source_root:
+            assert obj.parent == source_root
+            assert (obj.matrix_world.translation - obj.location - source_root.location).length < 1e-5
+    assert source["qb_stitch_targets"] == target["qb_import_id"]
+    assert assembly.stitch_import(operator, bpy.context, source)
+    assert tuple(source_root.location) == (11.5, 20, 30)
+
+    chain = import_map("stitch_third", "0 0 0", "stitch_new", stitch_goldsrc=True,
+                       import_entities=False, import_brush_entities=False)
+    assert tuple(assembly.assembly_root(chain).location) == (12, 20, 30)
+    assert len(chain.all_objects) == 2
+    unstitched = import_map("stitch_off", "16 0 0", "stitch_old")
+    assert tuple(assembly.assembly_root(unstitched).location) == (0, 0, 0)
+
+    duplicate = import_map("stitch_old", "64 0 0", import_entities=False)
+    ambiguous = import_map("stitch_ambiguous", "16 0 0", "stitch_old", stitch_goldsrc=True)
+    assert tuple(assembly.assembly_root(ambiguous).location) == (0, 0, 0)
+    assert "qb_stitch_offset" not in ambiguous
+    selected = import_map("stitch_selected", "16 0 0", "stitch_old", stitch_goldsrc=True,
+                          stitch_target=target["qb_import_id"])
+    assert tuple(assembly.assembly_root(selected).location) == (11.5, 20, 30)
+    assert tuple(assembly.assembly_root(duplicate).location) == (0, 0, 0)
+
+    operator.stitch_target = target["qb_import_id"]
+    target_root.rotation_euler.z = 0.5
+    assert not assembly.stitch_import(operator, bpy.context, selected)
+    assert tuple(assembly.assembly_root(selected).location) == (11.5, 20, 30)
+    target_root.rotation_euler.z = 0
+    target_root.scale = (2, 2, 2)
+    assert not assembly.stitch_import(operator, bpy.context, selected)
+    target_root.scale = (1, 1, 1)
+    incompatible = import_map("stitch_scale", "16 0 0", "stitch_old", stitch_goldsrc=True,
+                              stitch_target=target["qb_import_id"], scale=0.25)
+    assert tuple(assembly.assembly_root(incompatible).location) == (0, 0, 0)
+
+    categories = ("objects", "collections", "meshes", "materials", "images", "lights", "cameras")
+    before = {category: {item.as_pointer() for item in getattr(bpy.data, category)} for category in categories}
+    original_stitch = assembly.stitch_import
+
+    def fail_after_placement(*args):
+        assert original_stitch(*args)
+        raise RuntimeError("intentional stitching rollback")
+
+    assembly.stitch_import = fail_after_placement
+    try:
+        try:
+            import_map("stitch_failure", "16 0 0", "stitch_old", stitch_goldsrc=True,
+                       stitch_target=target["qb_import_id"])
+        except RuntimeError as exc:
+            assert "intentional stitching rollback" in str(exc)
+        else:
+            raise AssertionError("stitching failure did not cancel the import")
+    finally:
+        assembly.stitch_import = original_stitch
+    assert before == {category: {item.as_pointer() for item in getattr(bpy.data, category)}
+                      for category in categories}
+    assert tuple(target_root.location) == (10, 20, 30)
+
+
+def _check_map_transform_export(extension_root: str, directory: Path) -> None:
+    parser = importlib.import_module(f"{extension_root}.formats.map_q1")
+    csg = importlib.import_module(f"{extension_root}.formats.csg")
+    writer = importlib.import_module(f"{extension_root}.formats.map_writer")
+    geometry = importlib.import_module(f"{extension_root}.blender.builder_geometry")
+    scene_export = importlib.import_module(f"{extension_root}.blender.map_scene_export")
+    for game, fixture in (("Q1", _Q1_MAP), ("Q2", _Q2_MAP)):
+        path = directory / f"transform_{game}.map"
+        path.write_text(fixture, encoding="ascii")
+        assert bpy.ops.quakeblend.import_map(filepath=str(path), source_game=game,
+                                             wad_paths=";", scale=0.125) == {"FINISHED"}
+        root = _source_roots(path)[0]
+        brush = next(obj for obj in root.all_objects if obj.type == "MESH")
+        for obj in bpy.context.selected_objects:
+            obj.select_set(False)
+        brush.select_set(True)
+        bpy.context.view_layer.objects.active = brush
+        source = parser.parse_path(path)
+        entity_index = brush["qb_owner_entity_index"]
+        brush_index = brush["qb_brush_index"]
+        original = source.entities[entity_index].brushes[brush_index]
+        assert sorted(item.value for item in brush.data.attributes["qb_source_face"].data) == list(range(len(original.faces)))
+        parent = bpy.data.objects.new("Transform test parent", None)
+        root.objects.link(parent)
+        parent.location = (1, 2, 3)
+        brush.parent = parent
+        brush.location = (2, -1, 0.5)
+        brush.rotation_euler.z = math.radians(37)
+        brush.scale = (2, 0.5, 1.5)
+        destination = directory / f"transformed_{game}.map"
+
+        def export(**options):
+            return bpy.ops.quakeblend.export_map(filepath=str(destination), target_game=game,
+                                                 projection="VALVE220", **options)
+
+        assert export(use_brush_transforms=True) == {"FINISHED"}
+        restored = parser.parse_path(destination).entities[entity_index].brushes[brush_index]
+        rings = csg.brush_faces_from_planes([face.plane for face in restored.faces])
+        ids = [item.value for item in brush.data.attributes["qb_source_face"].data]
+        for polygon, face_id in zip(brush.data.polygons, ids):
+            for loop_index in polygon.loop_indices:
+                loop = brush.data.loops[loop_index]
+                expected = brush.matrix_world @ brush.data.vertices[loop.vertex_index].co / 0.125
+                assert min((Vector(tuple(vertex)) - expected).length for vertex in rings[face_id]) < 1e-3
+                dimensions = (brush.data.attributes["qb_texture_width"].data[polygon.index].value,
+                              brush.data.attributes["qb_texture_height"].data[polygon.index].value)
+                point = next(vertex for vertex in rings[face_id] if (Vector(tuple(vertex)) - expected).length < 1e-3)
+                projected = geometry._project_uv(restored.faces[face_id].tex, point, dimensions)
+                uv = brush.data.uv_layers.active.data[loop_index].uv
+                assert abs(projected[0] - uv.x) * dimensions[0] < 0.001
+                assert abs(1 - projected[1] - uv.y) * dimensions[1] < 0.001
+        if game == "Q2":
+            assert [(face.tex.contents, face.tex.surface_flags, face.tex.value) for face in restored.faces] == [
+                (face.tex.contents, face.tex.surface_flags, face.tex.value) for face in original.faces]
+        anchor = next((obj for obj in root.all_objects if obj.get("qb_entity_has_origin")), None)
+        if game == "Q1":
+            assert anchor is not None
+        if anchor is not None:
+            saved_location = anchor.location.copy()
+            anchor.location.x += 1
+            assert export(use_brush_transforms=True, use_scene_entity_edits=True) == {"FINISHED"}
+            overlay = parser.parse_path(destination)
+            actual_origin = Vector(tuple(float(value) for value in overlay.entities[anchor["qb_entity_index"]].properties["origin"].split()))
+            assert (actual_origin - anchor.location / 0.125).length < 1e-4
+            assert overlay.entities[entity_index].brushes[brush_index] == restored
+            anchor.location = saved_location
+        assert export(use_brush_transforms=False) == {"FINISHED"}
+        replayed = parser.parse_path(destination)
+        assert writer.serialize(replayed, dialect=game.lower(), projection="valve220") == writer.serialize(
+            source, dialect=game.lower(), projection="valve220")
+
+        def rejected():
+            destination.write_bytes(b"existing destination must survive")
+            try:
+                result = export(use_brush_transforms=True)
+            except RuntimeError:
+                result = {"CANCELLED"}
+            assert result == {"CANCELLED"}
+            assert destination.read_bytes() == b"existing destination must survive"
+
+        vertex = brush.data.vertices[0]
+        original_position = vertex.co.copy()
+        vertex.co.x += 1
+        rejected()
+        brush.data.vertices[0].co = original_position
+        baseline = root["qb_transform_baselines"][f"{entity_index}:{brush_index}"]
+        assert scene_export.mesh_signature(brush) == baseline, "vertex restore failed"
+        uv = brush.data.uv_layers.active.data[0]
+        original_uv = uv.uv.copy()
+        uv.uv.x += 0.1
+        rejected()
+        brush.data.uv_layers.active.data[0].uv = original_uv
+        assert scene_export.mesh_signature(brush) == baseline, "UV restore failed"
+        original_material = brush.data.materials[0]
+        replacement_material = bpy.data.materials.new("Rejected material replacement")
+        brush.data.materials[0] = replacement_material
+        rejected()
+        brush.data.materials[0] = original_material
+        bpy.data.materials.remove(replacement_material)
+        owners = list(brush.users_collection)
+        for owner in owners:
+            owner.objects.unlink(brush)
+        bpy.context.view_layer.objects.active = parent
+        rejected()
+        for owner in owners:
+            owner.objects.link(brush)
+        bpy.context.view_layer.objects.active = brush
+        duplicate = brush.copy()
+        root.objects.link(duplicate)
+        rejected()
+        bpy.data.objects.remove(duplicate, do_unlink=True)
+        modifier = brush.modifiers.new("Unsupported bevel", "BEVEL")
+        rejected()
+        brush.modifiers.remove(modifier)
+        brush.scale.x = -2
+        rejected()
+        brush.scale.x = 0
+        rejected()
+        brush.scale.x = 2
+        parent.scale = (2, 1, 1)
+        rejected()
+        parent.scale = (1, 1, 1)
+        face_id = brush.data.attributes["qb_source_face"].data[0]
+        saved_id = face_id.value
+        face_id.value = 99
+        rejected()
+        brush.data.attributes["qb_source_face"].data[0].value = saved_id
+        saved_scale = root["qb_import_scale"]
+        root["qb_import_scale"] = 1
+        rejected()
+        root["qb_import_scale"] = saved_scale
+        path.write_text(fixture + "\n", encoding="ascii")
+        rejected()
+        path.write_text(fixture, encoding="ascii")
+        brush.location.x = 125000
+        rejected()
+        brush.location.x = 2
+        assert export(use_brush_transforms=True) == {"FINISHED"}
+
+
 def _check_unregister(extension_root: str) -> None:
     module = importlib.import_module(extension_root)
     rna_identifiers = (
@@ -666,7 +1269,13 @@ def main() -> None:
         _check_import_failure_rollback(args.extension_root, directory)
         _check_texture_case_and_face_flags(directory)
         _check_bsp_and_wad_workflows(directory)
+        _check_wad3_palettes(directory)
+        _check_cameras(args.extension_root, directory)
         _check_bsp_submodels(directory)
+        _check_bsp_import_controls(directory)
+        _check_goldsrc(directory)
+        _check_goldsrc_stitching(args.extension_root, directory)
+        _check_map_transform_export(args.extension_root, directory)
     _check_unregister(args.extension_root)
     print(
         "QUAKEBLEND_SMOKE_OK registration materials transaction "

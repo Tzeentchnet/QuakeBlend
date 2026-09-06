@@ -59,6 +59,10 @@ def brush_faces_from_planes(planes: Sequence[Plane], *,
 
     Empty rings (fewer than 3 vertices) are returned as ``[]`` so the caller
     can detect degenerate faces.
+
+    ``epsilon`` is a numerical tolerance in game units for half-space tests,
+    face membership, and coincident vertices. Large values can admit off-plane
+    points or erase narrow faces; the default preserves small geometric details.
     """
     n = len(planes)
     if n < 4:

@@ -38,6 +38,18 @@ def test_palette_validates_length() -> None:
         palette.from_bytes(b"\x00" * 100)
 
 
+def test_embedded_palette_without_quake_fullbrights() -> None:
+    pal = palette.from_bytes(_synthetic_palette().rgb, fullbright=())
+    indices = bytes((224, 254, 255))
+    assert not palette.has_fullbright(indices, pal)
+    assert palette.fullbright_mask(indices, pal) == bytes(3)
+    masked = palette.decode_indexed(indices, pal, opaque_index=255)
+    opaque = palette.decode_indexed(indices, pal, opaque_index=None)
+    assert masked[3::4] == bytes((255, 255, 0))
+    assert opaque[3::4] == bytes((255, 255, 255))
+    assert masked[:3] == pal.rgb[224 * 3:225 * 3]
+
+
 def test_bundled_q1_palette_has_correct_size() -> None:
     pal = palette.load_bundled("q1")
     assert len(pal.rgb) == 768

@@ -13,6 +13,8 @@ _DATA_COLLECTIONS = (
     "images",
     "lights",
     "cameras",
+    "node_groups",
+    "actions",
 )
 
 

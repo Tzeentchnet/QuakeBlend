@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import struct
+import hashlib
 from pathlib import Path
 from typing import Sequence
 
@@ -10,10 +11,15 @@ import bpy
 
 from ..formats import bsp_q1, bsp_q2, bsp_q3, palette as palette_mod, patch as patch_mod, wal as wal_mod
 from ..formats.common import Vec3
-from ..utils.constants import BSP_VERSION_Q1, BSP_VERSION_Q2, BSP_VERSION_Q3, IBSP_MAGIC
+from ..utils.constants import (
+    BSP_VERSION_Q1, BSP_VERSION_Q2, BSP_VERSION_Q3, BSP_VERSION_GOLDSRC,
+    CAMERA_ENTITY_CLASSNAMES, IBSP_MAGIC,
+)
 from ..utils import log as qb_log, paths as qb_paths
-from . import builder_entities, builder_geometry, builder_materials
+from . import builder_entities, builder_geometry, builder_materials, builder_q3_materials
 from .prefs import get_prefs
+from .import_options import ImportState
+from ..utils.import_options import is_trigger
 
 
 def _resolve_texture_root(operator: bpy.types.Operator,
@@ -81,7 +87,9 @@ def _build_submodel_objects(entities: list[dict[str, str]],
                             material_list: Sequence[bpy.types.Material],
                             collection: bpy.types.Collection,
                             stem: str,
-                            *, face_count: int, scale: float) -> None:
+                            *, face_count: int, scale: float,
+                            import_brush_entities: bool = True, q3_bsp=None,
+                            q3_materials=None, state=None) -> None:
     """Build one mesh object per BSP submodel; model 0 is the world.
 
     ``face_records`` are ``(face_index, polygon, material_slot, uvs)`` tuples.
@@ -91,9 +99,19 @@ def _build_submodel_objects(entities: list[dict[str, str]],
     owner_of_model = _entities_by_model(entities)
     model_of_face = _model_of_face(models, face_count)
     grouped: dict[int, list[tuple]] = {}
+    skipped_models = set()
     for record in face_records:
-        grouped.setdefault(model_of_face[record[0]], []).append(record)
+        model_index = model_of_face[record[0]]
+        if model_index != 0 and not import_brush_entities:
+            continue
+        if state and not state.options.model_allowed(model_index, owner_of_model.get(model_index, {})):
+            if not state.options.worldspawn_only:
+                skipped_models.add(model_index)
+            continue
+        grouped.setdefault(model_index, []).append(record)
 
+    if state:
+        state.counts["skipped"] += len(skipped_models)
     for model_index in sorted(grouped):
         selected = grouped[model_index]
         model_verts, model_polys = _compact_polygons(
@@ -115,33 +133,64 @@ def _build_submodel_objects(entities: list[dict[str, str]],
             collection=collection,
             material_list=material_list,
             scale=scale,
+            corner_channels=[[
+                (*_flip_v(q3_bsp.vertices[index].lm_uv),
+                 *(value / 255 for value in q3_bsp.vertices[index].color),
+                 *q3_bsp.vertices[index].normal)
+                for index in record[1]] for record in selected] if q3_bsp else None,
+            source_faces=[record[0] for record in selected] if q3_bsp else None,
+            shader_indices=[q3_bsp.faces[record[0]].texture for record in selected] if q3_bsp else None,
         )
         obj["qb_bsp_model_index"] = model_index
         if owner is not None:
             builder_entities.tag_entity_properties(obj, owner)
+        if state:
+            state.mark(obj, {"trigger"} if is_trigger(owner or {}) else set())
+        if q3_materials is not None:
+            q3_materials.apply(obj)
 
 
 def _build_bsp_entities(operator: bpy.types.Operator,
                         entities: list[dict[str, str]],
                         root: bpy.types.Collection,
                         stem: str,
-                        *, scale: float) -> None:
-    if not getattr(operator, "import_entities", True):
+                        *, scale: float, game: str = "q1", state=None) -> None:
+    if not getattr(operator, "import_entities", True) or (state and state.options.worldspawn_only):
         return
     light_multiplier = float(getattr(operator, "light_energy", 1.0))
-    ent_coll = bpy.data.collections.new(f"{stem}_Entities")
-    root.children.link(ent_coll)
+    if state:
+        ent_coll = state.collection(root, f"{stem}_Entities")
+    else:
+        ent_coll = bpy.data.collections.new(f"{stem}_Entities")
+        root.children.link(ent_coll)
     for entity in entities:
+        if game == "goldsrc" and entity.get("model", "").startswith("*"):
+            continue
         classname = entity.get("classname", "entity")
+        categories = {"trigger"} if is_trigger(entity) else set()
+        if state and state.options.disposition(categories) == "SKIP":
+            if entity.get("origin"):
+                try:
+                    builder_entities.parse_origin(entity["origin"])
+                except ValueError:
+                    pass
+                else:
+                    state.counts["skipped"] += 1
+            continue
         if not getattr(operator, "import_lights", True) and classname.startswith("light"):
             continue
-        builder_entities.build_entity(
+        if not getattr(operator, "import_cameras", True) and classname in CAMERA_ENTITY_CLASSNAMES:
+            continue
+        obj = builder_entities.build_entity(
             entity,
             ent_coll,
             scale=scale,
             light_multiplier=light_multiplier,
+            game=game,
             operator=operator,
         )
+        if state:
+            state.mark(obj, categories)
 
 
 def _detect_version(filepath: Path) -> tuple[str, int]:
@@ -161,6 +210,8 @@ def _detect_version(filepath: Path) -> tuple[str, int]:
     version = struct.unpack("<i", head[:4])[0]
     if version == BSP_VERSION_Q1:
         return "q1", version
+    if version == BSP_VERSION_GOLDSRC:
+        return "goldsrc", version
     raise ValueError(f"unrecognised BSP signature (first int = {version})")
 
 
@@ -208,10 +259,12 @@ def _project_face_uvs(bsp: bsp_q1.Bsp, face: bsp_q1.Face,
 
 def _import_q1(operator: bpy.types.Operator, context: bpy.types.Context,
                filepath: Path) -> None:
+    state = ImportState(operator, context, bsp=True)
     scale = float(getattr(operator, "scale", 1.0 / 32.0))
     bsp = bsp_q1.read_path(filepath)
     bsp.validate()
-    materials_by_miptex = _build_q1_materials(bsp, filepath)
+    create_materials = bool(getattr(operator, "create_materials", True))
+    materials_by_miptex = _build_q1_materials(bsp, filepath) if create_materials else {}
 
     # Build a flat material list + per-face material index.
     material_list: list[bpy.types.Material] = []
@@ -228,7 +281,7 @@ def _import_q1(operator: bpy.types.Operator, context: bpy.types.Context,
         if len(poly) < 3:
             continue
         ti_idx = bsp.texinfos[face.texinfo_id].miptex_index if 0 <= face.texinfo_id < len(bsp.texinfos) else -1
-        material_slot = miptex_to_slot.get(ti_idx)
+        material_slot = miptex_to_slot.get(ti_idx) if create_materials else -1
         if material_slot is None:
             missing_texture_faces += 1
             if missing_texture_slot is None:
@@ -265,8 +318,7 @@ def _import_q1(operator: bpy.types.Operator, context: bpy.types.Context,
     scene = context.scene
     root = bpy.data.collections.new(filepath.stem)
     scene.collection.children.link(root)
-    geom_coll = bpy.data.collections.new(f"{filepath.stem}_Geometry")
-    root.children.link(geom_coll)
+    geom_coll = state.collection(root, f"{filepath.stem}_Geometry")
 
     _build_submodel_objects(
         bsp.entities,
@@ -278,14 +330,21 @@ def _import_q1(operator: bpy.types.Operator, context: bpy.types.Context,
         filepath.stem,
         face_count=len(bsp.faces),
         scale=scale,
+        import_brush_entities=bool(getattr(operator, "import_brush_entities", True)),
+        state=state,
     )
 
-    _build_bsp_entities(operator, bsp.entities, root, filepath.stem, scale=scale)
+    _build_bsp_entities(operator, bsp.entities, root, filepath.stem, scale=scale, state=state)
+    state.finish(root)
 
 
 def run(operator: bpy.types.Operator, context: bpy.types.Context, filepath: str) -> None:
     path = Path(filepath)
     flavour, version = _detect_version(path)
+    if flavour == "goldsrc":
+        from . import import_runner_goldsrc
+        import_runner_goldsrc.run(operator, context, path)
+        return
     if flavour == "q1":
         _import_q1(operator, context, path)
         return
@@ -376,6 +435,7 @@ def _project_q2_face_uvs(bsp: bsp_q2.Bsp, face: bsp_q2.Face,
 
 def _import_q2(operator: bpy.types.Operator, context: bpy.types.Context,
                filepath: Path) -> None:
+    state = ImportState(operator, context, bsp=True)
     scale = float(getattr(operator, "scale", 1.0 / 32.0))
     texture_root = _resolve_texture_root(operator, context)
 
@@ -386,7 +446,10 @@ def _import_q2(operator: bpy.types.Operator, context: bpy.types.Context,
         if texture_root is not None
         else None
     )
-    materials_by_name = _build_q2_materials(operator, bsp, texture_index)
+    create_materials = bool(getattr(operator, "create_materials", True))
+    materials_by_name = (
+        _build_q2_materials(operator, bsp, texture_index) if create_materials else {}
+    )
 
     material_list: list[bpy.types.Material] = []
     name_to_slot: dict[str, int] = {}
@@ -402,6 +465,19 @@ def _import_q2(operator: bpy.types.Operator, context: bpy.types.Context,
                     size = (node.image.size[0], node.image.size[1])
                     break
         texture_sizes[name] = size
+
+    if not create_materials and texture_index is not None:
+        for name in dict.fromkeys(texinfo.texture_name for texinfo in bsp.texinfos):
+            info = texture_index.resolve(name, kind="wal")
+            if info is None:
+                continue
+            wal_path, _ = info
+            try:
+                texture = wal_mod.read_wal_path(wal_path)
+                texture_sizes[name] = (texture.width, texture.height)
+            except (OSError, ValueError) as exc:
+                qb_log.report(operator, {"WARNING"},
+                              f"Failed to read WAL dimensions for '{name}': {exc}")
 
     face_records: list[tuple] = []
     for face_index, face in enumerate(bsp.faces):
@@ -422,8 +498,7 @@ def _import_q2(operator: bpy.types.Operator, context: bpy.types.Context,
     scene = context.scene
     root = bpy.data.collections.new(filepath.stem)
     scene.collection.children.link(root)
-    geom_coll = bpy.data.collections.new(f"{filepath.stem}_Geometry")
-    root.children.link(geom_coll)
+    geom_coll = state.collection(root, f"{filepath.stem}_Geometry")
 
     _build_submodel_objects(
         bsp.entities,
@@ -435,9 +510,12 @@ def _import_q2(operator: bpy.types.Operator, context: bpy.types.Context,
         filepath.stem,
         face_count=len(bsp.faces),
         scale=scale,
+        import_brush_entities=bool(getattr(operator, "import_brush_entities", True)),
+        state=state,
     )
 
-    _build_bsp_entities(operator, bsp.entities, root, filepath.stem, scale=scale)
+    _build_bsp_entities(operator, bsp.entities, root, filepath.stem, scale=scale, state=state)
+    state.finish(root)
 
 
 # ============================================================ Quake 3 ======
@@ -491,28 +569,56 @@ def _build_q3_materials(operator: bpy.types.Operator,
 
 def _import_q3(operator: bpy.types.Operator, context: bpy.types.Context,
                filepath: Path) -> None:
+    state = ImportState(operator, context, bsp=True)
     scale = float(getattr(operator, "scale", 1.0 / 32.0))
     patch_level = int(getattr(operator, "patch_level", 5))
     texture_root = _resolve_texture_root(operator, context)
 
     bsp = bsp_q3.read_path(filepath)
     bsp.validate()
+    model_of_face = _model_of_face(bsp.models, len(bsp.faces))
+    owners = _entities_by_model(bsp.entities)
+    included = [state.options.model_allowed(index, owners.get(index, {})) for index in model_of_face]
+    create_materials = bool(getattr(operator, "create_materials", True))
     texture_index = (
         qb_paths.TextureRootIndex(texture_root)
-        if texture_root is not None
+        if texture_root is not None and create_materials
         else None
     )
-    material_list = _build_q3_materials(operator, bsp, texture_index)
+    q3_materials = None
+    face_slots = [face.texture for face in bsp.faces]
+    if create_materials and getattr(operator, "q3_material_mode", "SHADERS") == "SHADERS":
+        q3_materials = builder_q3_materials.Q3Materials(texture_root, context.scene,
+            lightmaps=bsp.lightmaps, source_key=hashlib.sha256(filepath.read_bytes()).hexdigest(),
+            scale=scale, **state.options.shader_kwargs())
+        material_list = []
+        slots = {}
+        for index, face in enumerate(bsp.faces):
+            if not included[index]:
+                continue
+            identity = face.texture, face.lm_index
+            if identity not in slots:
+                slots[identity] = len(material_list)
+                material_list.append(q3_materials.get(bsp.textures[face.texture].name, face.lm_index))
+            face_slots[index] = slots[identity]
+    else:
+        material_list = _build_q3_materials(operator, bsp, texture_index) if create_materials else []
 
     scene = context.scene
     root = bpy.data.collections.new(filepath.stem)
     scene.collection.children.link(root)
-    geom_coll = bpy.data.collections.new(f"{filepath.stem}_Geometry")
-    root.children.link(geom_coll)
+    geom_coll = state.collection(root, f"{filepath.stem}_Geometry")
+    root["qb_q3_material_mode"] = "SHADERS" if q3_materials else "DIRECT"
 
     # Pass 1: polygon + mesh face types use shared vertex buffer.
     poly_records: list[tuple] = []
+    skipped_models = set()
     for face_index, face in enumerate(bsp.faces):
+        if not included[face_index]:
+            if (not state.options.worldspawn_only and state.options.import_brush_entities
+                    and face.type in {bsp_q3.FACE_TYPE_POLY, bsp_q3.FACE_TYPE_MESH}):
+                skipped_models.add(model_of_face[face_index])
+            continue
         if face.type == bsp_q3.FACE_TYPE_POLY or face.type == bsp_q3.FACE_TYPE_MESH:
             base = face.vertex
             if face.n_meshverts > 0:
@@ -525,7 +631,7 @@ def _import_q3(operator: bpy.types.Operator, context: bpy.types.Context,
                         poly_records.append((
                             face_index,
                             [base + tri[0], base + tri[1], base + tri[2]],
-                            face.texture,
+                            face_slots[face_index],
                             [_flip_v(bsp.vertices[base + i].tex_uv) for i in tri],
                         ))
                 continue
@@ -534,10 +640,11 @@ def _import_q3(operator: bpy.types.Operator, context: bpy.types.Context,
                 poly_records.append((
                     face_index,
                     indices,
-                    face.texture,
+                    face_slots[face_index],
                     [_flip_v(bsp.vertices[i].tex_uv) for i in indices],
                 ))
 
+    state.counts["skipped"] += len(skipped_models)
     _build_submodel_objects(
         bsp.entities,
         bsp.models,
@@ -548,6 +655,10 @@ def _import_q3(operator: bpy.types.Operator, context: bpy.types.Context,
         filepath.stem,
         face_count=len(bsp.faces),
         scale=scale,
+        import_brush_entities=bool(getattr(operator, "import_brush_entities", True)),
+        q3_bsp=bsp if q3_materials else None,
+        q3_materials=q3_materials,
+        state=state,
     )
 
     # Pass 2: patches → tessellated quads, one mesh per patch (preserves
@@ -557,13 +668,18 @@ def _import_q3(operator: bpy.types.Operator, context: bpy.types.Context,
     for fi, face in enumerate(bsp.faces):
         if face.type != bsp_q3.FACE_TYPE_PATCH:
             continue
+        if not included[fi]:
+            if not state.options.worldspawn_only and state.options.import_brush_entities:
+                state.counts["skipped"] += 1
+            continue
         cw, ch = face.size
         if cw < 3 or ch < 3 or cw * ch != face.n_vertexes:
             continue
         controls: list[patch_mod.Control] = []
         for k in range(face.n_vertexes):
             v = bsp.vertices[face.vertex + k]
-            controls.append(patch_mod.Control(pos=v.pos, uv=v.tex_uv))
+            controls.append(patch_mod.Control(pos=v.pos, uv=v.tex_uv,
+                channels=(*v.lm_uv, *(value / 255 for value in v.color), *v.normal) if q3_materials else ()))
         patch = patch_mod.Patch(width=cw, height=ch, controls=controls)
         try:
             tess = patch_mod.tessellate(patch, level=patch_level)
@@ -576,18 +692,22 @@ def _import_q3(operator: bpy.types.Operator, context: bpy.types.Context,
             continue
 
         if patches_coll is None:
-            patches_coll = bpy.data.collections.new(f"{filepath.stem}_Patches")
-            root.children.link(patches_coll)
+            patches_coll = state.collection(root, f"{filepath.stem}_Patches")
         flipped_quads = [[_flip_v(tess.uvs[i]) for i in q] for q in tess.quads]
         patch_obj = builder_geometry.build_bsp_geometry(
             name=f"{filepath.stem}_patch_{fi}",
             vertices=tess.vertices,
             face_polygons=[list(q) for q in tess.quads],
-            face_materials=[face.texture] * len(tess.quads),
+            face_materials=[face_slots[fi]] * len(tess.quads),
             face_uvs=flipped_quads,
             collection=patches_coll,
             material_list=material_list,
             scale=scale,
+            corner_channels=[[
+                (tess.channels[index][0], 1 - tess.channels[index][1], *tess.channels[index][2:])
+                for index in quad] for quad in tess.quads] if q3_materials else None,
+            source_faces=[fi] * len(tess.quads) if q3_materials else None,
+            shader_indices=[face.texture] * len(tess.quads) if q3_materials else None,
         )
         # Stash the original control grid for future export.
         patch_obj["qb_patch_control_grid"] = [
@@ -595,5 +715,12 @@ def _import_q3(operator: bpy.types.Operator, context: bpy.types.Context,
         ]
         patch_obj["qb_patch_size"] = [cw, ch]
         patch_obj["qb_bsp_model_index"] = model_of_face[fi]
+        state.mark(patch_obj, {"trigger"} if is_trigger(owners.get(model_of_face[fi], {})) else set())
+        if q3_materials:
+            q3_materials.apply(patch_obj)
 
-    _build_bsp_entities(operator, bsp.entities, root, filepath.stem, scale=scale)
+    if q3_materials:
+        for name, diagnostic in q3_materials.diagnostics.items():
+            qb_log.report(operator, {"WARNING"}, f"Q3 shader {name}: {diagnostic}")
+    _build_bsp_entities(operator, bsp.entities, root, filepath.stem, scale=scale, state=state)
+    state.finish(root)

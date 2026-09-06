@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
+from uuid import uuid4
 
 import bpy
 
@@ -11,12 +13,17 @@ from ..formats import (
     wad as wad_mod, wal as wal_mod,
 )
 from ..formats.csg import BrushFace, brush_faces
+from ..utils.constants import CAMERA_ENTITY_CLASSNAMES
 from ..utils import log as qb_log, paths as qb_paths
-from . import builder_entities, builder_geometry, builder_materials
+from ..utils.import_options import classify_tool_brush, is_trigger
+from ..utils.map_resources import MapResources
+from ..utils.q3_assets import Q3Assets
+from .import_options import ImportState
+from . import builder_entities, builder_geometry, builder_materials, builder_q3_materials, map_scene_export
 from .prefs import get_prefs
 
 
-def _load_wad_materials(wad_paths: list[Path]) -> builder_materials.MaterialCache:
+def _load_wad_materials(wad_paths: list[Path], *, create_materials=True, sizes=None) -> builder_materials.MaterialCache:
     """Load all WAD textures from the supplied paths and build materials."""
     pal = palette_mod.load_bundled("q1")
     out = builder_materials.MaterialCache()
@@ -25,9 +32,16 @@ def _load_wad_materials(wad_paths: list[Path]) -> builder_materials.MaterialCach
             continue
         archive = wad_mod.read_wad_path(path)
         for mt in archive.textures:
+            if sizes is not None:
+                sizes.setdefault(mt.name.casefold(), (mt.width, mt.height))
+            if not create_materials:
+                continue
             if mt.name in out:
                 continue
-            tex_pal = palette_mod.from_bytes(mt.palette) if mt.palette else pal
+            tex_pal = (
+                palette_mod.from_bytes(mt.palette, fullbright=())
+                if mt.palette else pal
+            )
             source_key = qb_paths.file_asset_key(
                 path,
                 namespace="wad",
@@ -131,6 +145,8 @@ def _tag_face_surface_flags(obj: bpy.types.Object, brush: map_q1.MapBrush) -> No
 
 
 def run(operator: bpy.types.Operator, context: bpy.types.Context, filepath: str) -> None:
+    state = ImportState(operator, context)
+    options = state.options
     scale = float(getattr(operator, "scale", 1.0 / 32.0))
     light_multiplier = float(getattr(operator, "light_energy", 1.0))
     wad_paths_str: str = getattr(operator, "wad_paths", "") or ""
@@ -143,7 +159,8 @@ def run(operator: bpy.types.Operator, context: bpy.types.Context, filepath: str)
     texture_root = _resolve_texture_root(operator, context)
     map_path = Path(filepath)
 
-    mf = map_q1.parse_path(map_path)
+    source_bytes = map_path.read_bytes()
+    mf = map_q1.parse(source_bytes.decode("latin-1"))
     requested_game = str(getattr(operator, "source_game", "AUTO")).lower()
     source_game = (
         map_q1.detect_game(mf)
@@ -152,7 +169,17 @@ def run(operator: bpy.types.Operator, context: bpy.types.Context, filepath: str)
     )
     if source_game not in ("q1", "q2", "q3"):
         raise ValueError(f"unsupported MAP source game {source_game!r}")
-    materials = _load_wad_materials(wad_paths)
+    if options.worldspawn_only and (not mf.entities or mf.entities[0].properties.get("classname", "").casefold() != "worldspawn"):
+        raise ValueError("Worldspawn Only requires the first MAP entity to be worldspawn")
+    shader_mode = source_game == "q3" and getattr(operator, "q3_material_mode", "SHADERS") == "SHADERS"
+    q3_materials = (builder_q3_materials.Q3Materials(texture_root, context.scene,
+        source_key=hashlib.sha256(source_bytes).hexdigest(), scale=scale, **options.shader_kwargs())
+        if shader_mode and options.create_materials else None)
+    sizes = {}
+    materials = builder_materials.MaterialCache() if shader_mode else _load_wad_materials(
+        wad_paths, create_materials=options.create_materials, sizes=sizes)
+    q3_assets = q3_materials.assets if q3_materials else (
+        Q3Assets.from_folder(texture_root) if source_game == "q3" and texture_root else Q3Assets({}))
     texture_index = (
         qb_paths.TextureRootIndex(texture_root)
         if texture_root is not None
@@ -167,6 +194,8 @@ def run(operator: bpy.types.Operator, context: bpy.types.Context, filepath: str)
         else {"q2": "wal", "q3": "image"}.get(source_game)
     )
     q2_palette = palette_mod.load_bundled("q2") if texture_root is not None else None
+    resources = MapResources(texture_index, source_game, external_texture_kind,
+        sizes=sizes, q3_assets=q3_assets, shader_mode=shader_mode, warn=state.warn)
 
     scene = context.scene
     root = bpy.data.collections.new(map_path.stem)
@@ -177,6 +206,11 @@ def run(operator: bpy.types.Operator, context: bpy.types.Context, filepath: str)
     root["qb_source_map"] = str(map_path.resolve())
     root["qb_source_game"] = source_game
     root["qb_import_scale"] = scale
+    root["qb_map_import_id"] = uuid4().hex
+    root["qb_source_sha256"] = hashlib.sha256(source_bytes).hexdigest()
+    root["qb_transform_scale"] = scale
+    root["qb_transform_baselines"] = {}
+    root["qb_omitted_brushes"] = {}
     projections = {
         "valve220" if face.tex.is_valve220 else "standard"
         for ent in mf.entities
@@ -189,10 +223,42 @@ def run(operator: bpy.types.Operator, context: bpy.types.Context, filepath: str)
 
     for ent_idx, entity in enumerate(mf.entities):
         classname = entity.properties.get("classname", f"entity_{ent_idx}")
-        ent_coll = bpy.data.collections.new(f"{ent_idx:04d}_{classname}")
-        root.children.link(ent_coll)
+        entity_categories = {"trigger"} if is_trigger(entity.properties) else set()
+        if (options.worldspawn_only and ent_idx != 0) or options.disposition(entity_categories) == "SKIP":
+            for brush_idx in range(len(entity.brushes)):
+                root["qb_omitted_brushes"][f"{ent_idx}:{brush_idx}"] = "Entity excluded"
+            if entity_categories and not options.worldspawn_only:
+                state.counts["skipped"] += (len(entity.brushes) if options.import_brush_entities else 0) + int(options.import_entities)
+            continue
+        ent_coll = state.collection(root, f"{ent_idx:04d}_{classname}")
 
         for brush_idx, brush in enumerate(entity.brushes):
+            if ent_idx != 0 and not options.import_brush_entities:
+                root["qb_omitted_brushes"][f"{ent_idx}:{brush_idx}"] = "Brush entities excluded"
+                continue
+            if brush.raw_kind in ("brushDef3", "brushDef"):
+                try:
+                    brush = brushdef3_mod.to_standard_brush(brush)
+                except (ValueError, StopIteration) as exc:
+                    state.warn(f"Skipping {brush.raw_kind} brush in entity {ent_idx}: {exc}")
+                    continue
+            if brush.raw_kind == "patchDef2":
+                try:
+                    texture_name, _ = patch_mod.parse_patch_def2_block(brush.raw_payload)
+                    surfaces = [resources.surface(map_q1.TexInfo(texture_name))]
+                except ValueError as exc:
+                    state.warn(f"Skipping patch in entity {ent_idx}: {exc}")
+                    continue
+            else:
+                surfaces = [resources.surface(face.tex) for face in brush.faces]
+            categories, diagnostic = classify_tool_brush(surfaces, source_game)
+            categories = categories | entity_categories
+            if diagnostic:
+                state.warn(f"Entity {ent_idx} brush {brush_idx}: {diagnostic}")
+            if options.disposition(categories) == "SKIP":
+                root["qb_omitted_brushes"][f"{ent_idx}:{brush_idx}"] = ",".join(sorted(categories))
+                state.counts["skipped"] += 1
+                continue
             if brush.raw_kind == "patchDef2":
                 patch_obj = _build_patch(
                     operator,
@@ -204,19 +270,14 @@ def run(operator: bpy.types.Operator, context: bpy.types.Context, filepath: str)
                     external_texture_kind,
                     q2_palette,
                     scale=scale,
+                    q3_materials=q3_materials,
+                    create_materials=options.create_materials,
                 )
                 if patch_obj is not None:
                     patch_obj["qb_owner_entity_index"] = ent_idx
                     patch_obj["qb_brush_index"] = brush_idx
+                    state.mark(patch_obj, categories)
                 continue
-            if brush.raw_kind in ("brushDef3", "brushDef"):
-                try:
-                    brush = brushdef3_mod.to_standard_brush(brush)
-                except (ValueError, StopIteration) as exc:
-                    operator.report({"WARNING"},
-                                    f"Skipping {brush.raw_kind} brush in entity "
-                                    f"{ent_idx}: {exc}")
-                    continue
             if brush.raw_kind != "standard":
                 operator.report({"WARNING"},
                                 f"Skipping {brush.raw_kind} brush in entity {ent_idx} "
@@ -230,7 +291,9 @@ def run(operator: bpy.types.Operator, context: bpy.types.Context, filepath: str)
             for csg, src in zip(csg_faces, brush.faces):
                 tex_name = src.tex.name
                 # On-demand external texture resolution (Q2 WAL / Q3 image).
-                if tex_name not in materials and texture_index is not None:
+                if options.create_materials and tex_name not in materials and q3_materials is not None:
+                    materials.add(tex_name, q3_materials.get(tex_name))
+                elif options.create_materials and tex_name not in materials and texture_index is not None:
                     info = texture_index.resolve(
                         tex_name,
                         kind=external_texture_kind,
@@ -239,13 +302,7 @@ def run(operator: bpy.types.Operator, context: bpy.types.Context, filepath: str)
                         mat = _material_for_external(operator, tex_name, info, q2_palette)
                         if mat is not None:
                             materials.add(tex_name, mat)
-                tex_size = (64, 64)
-                mat = materials.get(tex_name)
-                if mat is not None and mat.node_tree is not None:
-                    for node in mat.node_tree.nodes:
-                        if node.type == "TEX_IMAGE" and node.image is not None:
-                            tex_size = (node.image.size[0], node.image.size[1])
-                            break
+                tex_size = resources.dimensions(tex_name)
                 enriched.append(BrushFace(
                     plane=csg.plane,
                     vertices=csg.vertices,
@@ -258,16 +315,23 @@ def run(operator: bpy.types.Operator, context: bpy.types.Context, filepath: str)
                 ))
             obj = builder_geometry.build_map_brush(
                 brush, enriched, f"{classname}_brush_{brush_idx}",
-                ent_coll, materials, scale=scale,
+                ent_coll, materials, scale=scale, create_materials=options.create_materials,
             )
             if obj is not None:
                 obj["qb_owner_entity_index"] = ent_idx
                 obj["qb_brush_index"] = brush_idx
                 _tag_face_surface_flags(obj, brush)
+                map_scene_export.capture_brush(root, obj)
+                state.mark(obj, categories)
+                if q3_materials:
+                    q3_materials.apply(obj)
 
-        if getattr(operator, "import_entities", True):
+        if options.import_entities and not options.worldspawn_only:
             if (not getattr(operator, "import_lights", True)
                     and classname.startswith("light")):
+                continue
+            if (not getattr(operator, "import_cameras", True)
+                    and classname in CAMERA_ENTITY_CLASSNAMES):
                 continue
             built = builder_entities.build_entity(
                 entity.properties,
@@ -288,6 +352,14 @@ def run(operator: bpy.types.Operator, context: bpy.types.Context, filepath: str)
                 ent_idx,
                 has_valid_origin=has_valid_origin,
             )
+            state.mark(built, entity_categories)
+
+
+    if q3_materials:
+        root["qb_q3_material_mode"] = "SHADERS"
+        for name, diagnostic in q3_materials.diagnostics.items():
+            qb_log.report(operator, {"WARNING"}, f"Q3 shader {name}: {diagnostic}")
+    state.finish(root)
 
 
 def _build_patch(operator, brush, collection, name: str,
@@ -295,7 +367,7 @@ def _build_patch(operator, brush, collection, name: str,
                  texture_index: qb_paths.TextureRootIndex | None,
                  external_texture_kind: str | None,
                  q2_palette: palette_mod.Palette | None,
-                 *, scale: float) -> bpy.types.Object | None:
+                 *, scale: float, q3_materials=None, create_materials=True) -> bpy.types.Object | None:
     try:
         tex_name, p = patch_mod.parse_patch_def2_block(brush.raw_payload)
         tess = patch_mod.tessellate(p, level=int(getattr(operator, "patch_level", 5)))
@@ -304,13 +376,16 @@ def _build_patch(operator, brush, collection, name: str,
         return None
 
     material = materials.get(tex_name)
-    if material is None and texture_index is not None:
+    if create_materials and material is None and q3_materials is not None:
+        material = q3_materials.get(tex_name)
+        materials.add(tex_name, material)
+    elif create_materials and material is None and texture_index is not None:
         info = texture_index.resolve(tex_name, kind=external_texture_kind)
         if info is not None and q2_palette is not None:
             material = _material_for_external(operator, tex_name, info, q2_palette)
             if material is not None:
                 materials.add(tex_name, material)
-    if material is None:
+    if create_materials and material is None:
         material = builder_materials.get_or_create_placeholder_material(
             tex_name,
             asset_key=f"placeholder|map|{tex_name.casefold()}",
@@ -321,7 +396,8 @@ def _build_patch(operator, brush, collection, name: str,
     faces = [list(q) for q in tess.quads]
     mesh.from_pydata(verts, [], faces)
     mesh.update()
-    mesh.materials.append(material)
+    if create_materials:
+        mesh.materials.append(material)
     if mesh.uv_layers:
         uv_layer = mesh.uv_layers.active.data
     else:
@@ -340,4 +416,6 @@ def _build_patch(operator, brush, collection, name: str,
     obj["qb_patch_control_grid"] = [
         [c.pos.x, c.pos.y, c.pos.z, c.uv[0], c.uv[1]] for c in p.controls
     ]
+    if q3_materials:
+        q3_materials.apply(obj)
     return obj

@@ -18,7 +18,8 @@ the same Bezier interpolation applies to UVs.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+import math
 from typing import List
 
 from ..utils.constants import MAX_PATCH_DIMENSION, MAX_PATCH_LEVEL
@@ -29,6 +30,7 @@ from .common import Vec3, parse_finite_float
 class Control:
     pos: Vec3
     uv: tuple[float, float]
+    channels: tuple[float, ...] = ()
 
 
 @dataclass
@@ -46,6 +48,7 @@ class TessellatedPatch:
     vertices: List[Vec3]
     uvs: List[tuple[float, float]]
     quads: List[tuple[int, int, int, int]]
+    channels: list[tuple[float, ...]] = field(default_factory=list)
 
 
 def _bez(t: float, a: float, b: float, c: float) -> float:
@@ -66,7 +69,8 @@ def _bez_uv(t: float, a, b, c) -> tuple[float, float]:
 def _evaluate_subpatch(p: Patch, ox: int, oy: int, level: int,
                        verts: list[Vec3], uvs: list[tuple[float, float]],
                        quads: list[tuple[int, int, int, int]],
-                       sample_indices: dict[tuple[int, int], int]) -> None:
+                       sample_indices: dict[tuple[int, int], int],
+                       channels: list[tuple[float, ...]]) -> None:
     n = level + 1  # samples per side
     grid_idx = [[0] * n for _ in range(n)]
     # Collect 3×3 control net for this subpatch (positions + UVs).
@@ -89,6 +93,15 @@ def _evaluate_subpatch(p: Patch, ox: int, oy: int, level: int,
                 sample_indices[sample] = vertex_index
                 verts.append(point)
                 uvs.append(tex)
+                if p.controls[0].channels:
+                    values = tuple(
+                        _bez(s, *[
+                            _bez(t, *[p.get(ox + column, oy + row).channels[channel] for row in range(3)])
+                            for column in range(3)
+                        ])
+                        for channel in range(len(p.controls[0].channels))
+                    )
+                    channels.append(values)
             grid_idx[j][i] = vertex_index
 
     for j in range(level):
@@ -118,11 +131,17 @@ def tessellate(patch: Patch, level: int = 5) -> TessellatedPatch:
         raise ValueError("level must be >= 1")
     if level > MAX_PATCH_LEVEL:
         raise ValueError(f"level must not exceed {MAX_PATCH_LEVEL}")
+    channel_count = len(patch.controls[0].channels)
+    if channel_count > 32 or any(len(control.channels) != channel_count or
+                               not all(math.isfinite(value) for value in control.channels)
+                               for control in patch.controls):
+        raise ValueError("Patch channels must have consistent bounded width and finite values")
 
     verts: list[Vec3] = []
     uvs: list[tuple[float, float]] = []
     quads: list[tuple[int, int, int, int]] = []
     sample_indices: dict[tuple[int, int], int] = {}
+    channels: list[tuple[float, ...]] = []
     sub_w = (patch.width - 1) // 2
     sub_h = (patch.height - 1) // 2
     for sj in range(sub_h):
@@ -136,8 +155,9 @@ def tessellate(patch: Patch, level: int = 5) -> TessellatedPatch:
                 uvs,
                 quads,
                 sample_indices,
+                channels,
             )
-    return TessellatedPatch(vertices=verts, uvs=uvs, quads=quads)
+    return TessellatedPatch(vertices=verts, uvs=uvs, quads=quads, channels=channels)
 
 
 # ---------------------------------------------------- patchDef2 text parser

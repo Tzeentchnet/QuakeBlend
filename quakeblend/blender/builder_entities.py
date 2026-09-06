@@ -5,10 +5,13 @@ from __future__ import annotations
 import math
 
 import bpy
+from mathutils import Euler, Quaternion
 
-from ..formats.entities import parse_color, parse_origin
+from ..formats.entities import parse_camera_angles, parse_color, parse_goldsrc_light, parse_origin
 from ..utils import log as qb_log
-from ..utils.constants import DEFAULT_QUAKE_LIGHT, QUAKE_LIGHT_TO_WATTS
+from ..utils.constants import (
+    CAMERA_ENTITY_CLASSNAMES, DEFAULT_CAMERA_FOV, DEFAULT_QUAKE_LIGHT, QUAKE_LIGHT_TO_WATTS,
+)
 
 
 def _entity_label(entity: dict[str, str], classname: str) -> str:
@@ -42,6 +45,7 @@ def build_entity(entity: dict[str, str], collection: bpy.types.Collection,
                  *,
                  scale: float,
                  light_multiplier: float = 1.0,
+                 game: str = "q1",
                  operator: bpy.types.Operator | None = None) -> bpy.types.Object | None:
     classname = entity.get("classname", "entity")
     origin_str = entity.get("origin")
@@ -61,27 +65,67 @@ def build_entity(entity: dict[str, str], collection: bpy.types.Collection,
         return None
     location = (ox * scale, oy * scale, oz * scale)
 
-    if classname.startswith("light"):
+    unsupported_light = game == "goldsrc" and classname.startswith("light") and (
+        classname != "light" or bool(entity.get("target")) or entity.get("_sky", "0") != "0"
+    )
+    if unsupported_light:
+        message = f"GoldSrc {classname}: directional light rendering is unsupported; imported as an empty"
+        if operator is not None:
+            qb_log.report(operator, {"WARNING"}, message)
+        else:
+            qb_log.get_logger("blender").warning(message)
+        obj = bpy.data.objects.new(classname, None)
+        obj.empty_display_type = "PLAIN_AXES"
+    elif classname.startswith("light"):
         light_data = bpy.data.lights.new(name=classname, type="POINT")
         # Quake "light" is an intensity in Quake units; convert to watts.
-        light_data.energy = _light_energy(entity, scale, light_multiplier)
-        if "_color" in entity:
+        if game == "goldsrc":
+            try:
+                color, intensity = parse_goldsrc_light(entity.get("_light", str(DEFAULT_QUAKE_LIGHT)))
+            except ValueError as exc:
+                message = f"GoldSrc {classname}: invalid _light ({exc}); using default brightness"
+                if operator is not None:
+                    qb_log.report(operator, {"WARNING"}, message)
+                else:
+                    qb_log.get_logger("blender").warning(message)
+                color, intensity = (1.0, 1.0, 1.0), DEFAULT_QUAKE_LIGHT
+            light_data.color = color
+            light_data.energy = intensity * QUAKE_LIGHT_TO_WATTS * scale * scale * light_multiplier
+        else:
+            light_data.energy = _light_energy(entity, scale, light_multiplier)
+        if game != "goldsrc" and "_color" in entity:
             try:
                 light_data.color = parse_color(entity["_color"])
             except ValueError:
                 light_data.color = (1.0, 1.0, 1.0)
         obj = bpy.data.objects.new(classname, light_data)
-    elif classname in ("info_player_start", "info_player_deathmatch",
-                       "info_player_coop", "info_intermission"):
+    elif classname in CAMERA_ENTITY_CLASSNAMES:
         cam_data = bpy.data.cameras.new(name=classname)
+        cam_data.sensor_fit = "HORIZONTAL"
+        cam_data.lens = cam_data.sensor_width / (2.0 * math.tan(math.radians(DEFAULT_CAMERA_FOV) / 2.0))
+        cam_data.lens_unit = "FOV"
         obj = bpy.data.objects.new(classname, cam_data)
         try:
-            yaw = float(entity.get("angle", "0"))
-        except ValueError:
-            yaw = 0.0
-        # Quake camera looks down +X; Blender camera looks down -Z. Apply
-        # Z-up yaw + a -90° X tilt to align.
-        obj.rotation_euler = (math.radians(90), 0.0, math.radians(yaw - 90.0))
+            camera_entity = (
+                {**entity, "mangle": entity["angles"]}
+                if game == "goldsrc" and "angles" in entity else entity
+            )
+            pitch, yaw, roll = parse_camera_angles(camera_entity)
+        except ValueError as exc:
+            message = f"Camera {_entity_label(entity, classname)}: {exc}; using yaw fallback"
+            if operator is not None:
+                qb_log.report(operator, {"WARNING"}, message)
+            else:
+                qb_log.get_logger("blender").warning(message)
+            try:
+                pitch, yaw, roll = parse_camera_angles({"angle": entity.get("angle", "0")})
+            except ValueError:
+                pitch, yaw, roll = 0.0, 0.0, 0.0
+        orientation = Euler((math.radians(90.0 - pitch), 0.0,
+                             math.radians(yaw - 90.0))).to_quaternion()
+        obj.rotation_euler = (
+            orientation @ Quaternion((0.0, 0.0, 1.0), math.radians(-roll))
+        ).to_euler()
     else:
         obj = bpy.data.objects.new(classname, None)
         obj.empty_display_type = "PLAIN_AXES"

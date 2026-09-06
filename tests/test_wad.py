@@ -75,7 +75,7 @@ def _build_wad3(textures: list[tuple[str, int, int]]) -> bytes:
     body += b"".join(miptex_blobs)
     for (offset, size), (name, _w, _h) in zip(entries_meta, textures):
         body += struct.pack("<iii", offset, size, size)
-        body += bytes([0x44, 0])
+        body += bytes([0x43, 0])
         body += b"\x00\x00"
         body += name.encode("ascii").ljust(16, b"\x00")
     return body
@@ -113,6 +113,25 @@ def test_read_wad3_reads_palette() -> None:
     assert parsed.textures[0].palette is not None
     assert len(parsed.textures[0].palette) == 768
     assert parsed.textures[0].palette[:4] == bytes([0, 1, 2, 3])
+
+
+@pytest.mark.parametrize("flavour, entry_type, expected_count", [
+    ("WAD2", 0x44, 1),
+    ("WAD2", 0x43, 0),
+    ("WAD3", 0x43, 1),
+    ("WAD3", 0x44, 0),
+    ("WAD3", 0x42, 0),
+])
+def test_miptex_entry_type_depends_on_archive(
+    flavour: str, entry_type: int, expected_count: int,
+) -> None:
+    build_archive = _build_wad3 if flavour == "WAD3" else _build_wad2
+    data = bytearray(build_archive([("metal", 8, 8)]))
+    directory_offset = struct.unpack_from("<i", data, 8)[0]
+    data[directory_offset + 12] = entry_type
+    parsed = wad.read_wad(io.BytesIO(data))
+    assert len(parsed.entries) == 1
+    assert len(parsed.textures) == expected_count
 
 
 def test_read_wad_raises_on_truncated_mip_pixels() -> None:

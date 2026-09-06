@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "assets": [
+    {
+      "id": "librequake-e3m4",
+      "cache_directory": "librequake-4f9cb6c2",
+      "title": "Hounds of The Depths",
+      "author": "Nolcoz",
+      "revision": "4f9cb6c2e0e9a3dbe5617d161501b25b1e08436e",
+      "source_base_url": "https://raw.githubusercontent.com/ericwa/ericw-tools/4f9cb6c2e0e9a3dbe5617d161501b25b1e08436e/testmaps/LibreQuake/",
+      "license": "BSD-3-Clause",
+      "license_scope": "Source map under snapshot COPYING; retain all three included notices. No QuakeC, game binaries, or textures included.",
+      "qualification": "source-parser-only",
+      "format": "q1-valve220-map",
+      "map_path": "lq1/maps/src/e3/e3m4.map",
+      "expected": {
+        "entities": 1301,
+        "brushes": 3441,
+        "faces": 22180,
+        "valve220_faces": 22180,
+        "func_door": 78,
+        "light": 170
+      },
+      "missing_wads": [
+        "lq_secret.wad",
+        "lq_dev.wad",
+        "lq_terra.wad",
+        "lq_greek.wad",
+        "lq_legacy.wad",
+        "lq_wood.wad",
+        "lq_liquidsky.wad",
+        "lq_medieval.wad",
+        "lq_flesh.wad",
+        "lq_props.wad"
+      ],
+      "files": [
+        {
+          "path": "docs/COPYING",
+          "bytes": 1697,
+          "sha256": "c3426ae10fd52ab1a3c3d4de4f2fae60543403e3cfd09ae5dc2ec16ae4717d28"
+        },
+        {
+          "path": "docs/CREDITS",
+          "bytes": 3033,
+          "sha256": "dbf21b9d9753dee5a881e5cc52c21131494f08ef23469631618bb7e53350b0dc"
+        },
+        {
+          "path": "docs/README-IMPORTANT-LICENCE-INFO",
+          "bytes": 706,
+          "sha256": "121e4f2bbae888f442be76795c7e1b431bbfce9c7dd968407b4da969ccb50eae"
+        },
+        {
+          "path": "lq1/maps/src/e3/e3m4.map",
+          "bytes": 3161251,
+          "sha256": "a827f8a4f6e011d8c1b81c25b16e43b086bbdec97a82f8327057ae2dc0f3f2cf"
+        }
+      ]
+    }
+  ]
+}

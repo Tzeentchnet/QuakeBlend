@@ -3,6 +3,9 @@
 QuakeBlend is a Blender 5.0+ extension. Install a release archive for normal
 use, or build the extension archive from source.
 
+The current build has passed Windows checks on Blender 5.0.0 and 5.1.1. Other
+operating systems, Blender versions, and GPU configurations are not qualified.
+
 ## Install a release
 
 1. Download `quakeblend-*.zip` from the
@@ -55,6 +58,9 @@ archive root, and Python cache files are excluded.
 
 ## Next steps
 
+- Expand **QuakeBlend** under **Preferences > Add-ons** to configure global
+   import defaults. Reinstall the freshly built archive and restart Blender when
+   updating an older build; the version label alone may not distinguish local builds.
 - Read [Importing files](importing.md) for the available import operators.
 - Read [Testing and validation](testing.md) when working from source.
 - Return to the [project overview](../README.md).

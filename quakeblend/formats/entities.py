@@ -92,6 +92,48 @@ def parse_origin(value: str) -> tuple[float, float, float]:
     )  # type: ignore[return-value]
 
 
+def parse_camera_angles(entity: dict[str, str]) -> tuple[float, float, float]:
+    """Return camera pitch, yaw and roll in degrees, preferring ``mangle``."""
+    try:
+        if "mangle" in entity:
+            parts = entity["mangle"].split()
+            if len(parts) != 3:
+                raise ValueError("mangle must have exactly 3 components")
+            pitch, yaw, roll = (
+                parse_finite_float(part, context="camera angle") for part in parts
+            )
+            return pitch, yaw, roll
+        yaw = parse_finite_float(entity.get("angle", "0"), context="camera yaw")
+        return 0.0, yaw, 0.0
+    except ValueError as exc:
+        raise ValueError(f"invalid camera angles: {exc}") from exc
+
+
+def parse_goldsrc_light(value: str) -> tuple[tuple[float, float, float], float]:
+    """Split GoldSrc ``_light`` into Blender color and unscaled intensity.
+
+    Scalar and RGB-only forms express channel intensities. Four components
+    express byte-range RGB followed by brightness. This does not reproduce
+    the compiler's nonlinear light scaling or radiosity.
+    """
+    parts = value.split()
+    if len(parts) not in (1, 3, 4):
+        raise ValueError("GoldSrc _light needs 1, 3 or 4 components")
+    components = [parse_finite_float(part, context="GoldSrc light") for part in parts]
+    if any(component < 0 for component in components):
+        raise ValueError("GoldSrc light components must be nonnegative")
+    if len(components) == 1:
+        return (1.0, 1.0, 1.0), components[0]
+    red, green, blue = components[:3]
+    if len(components) == 4:
+        if max(red, green, blue) > 255:
+            raise ValueError("GoldSrc light RGB components must be at most 255")
+        return (red / 255.0, green / 255.0, blue / 255.0), components[3]
+    intensity = max(red, green, blue)
+    divisor = intensity or 1.0
+    return (red / divisor, green / divisor, blue / divisor), intensity
+
+
 def parse_color(value: str) -> tuple[float, float, float]:
     """Parse either normalized ``0..1`` or byte-range ``0..255`` RGB."""
     parts = value.split()

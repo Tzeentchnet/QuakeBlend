@@ -51,6 +51,26 @@ Each operator wraps its runner in `ImportTransaction`. If the runner raises,
 the transaction removes datablocks created during that import and leaves
 pre-existing Blender data intact.
 
+Import policy lives in `utils/import_options.py`: effective options, whole-brush
+tool classification and content precedence are pure Python. `utils/map_resources.py`
+separates source metadata/projection sizes from material creation, using the bounded
+image-header reader in `formats/image_info.py`. The Blender `import_options.py`
+adapter owns native controls, collection organization and per-object viewport
+hiding. BSP UI detection reads only the header when file selection changes.
+
+`blender/prefs.py` stores interactive import defaults and reuses shared property
+definitions from the Blender import-options adapter. The operator `invoke` hook
+seeds only properties not explicitly supplied (`is_property_set(..., ghost=False)`),
+then delegates to `ImportHelper`. It does not reseed in `execute`, so loaded presets,
+dialog edits and direct scripted execution retain their established precedence.
+MAP and BSP lighting preferences are separate; file-specific source selection and
+scene-specific stitch targets are not global defaults.
+
+Q3 material identity includes lighting and effect switches. Fullbright and Blender
+Lighting bypass baked RGB inputs without discarding source lightmap UV/color
+attributes or vertex alpha. Stage time and geometry deformation are independent;
+their nodes persist without handlers. No mode mutates global scene lighting.
+
 ## Export pipeline
 
 MAP export intentionally does not reconstruct source brushes from Blender
@@ -76,6 +96,9 @@ keys with Blender's own names. Examples include:
 - `qb_entity_index` and `qb_prop_<key>` on entity anchors
 - `qb_bsp_model_index` on BSP geometry
 - `qb_patch_control_grid` and `qb_patch_size` on imported patches
+- `qb_import_options` and `qb_tool_counts` on import roots
+- `qb_tool_categories` and `qb_tool_handling` on recognized tool objects
+- `qb_omitted_brushes` on MAP roots, blocking incomplete transform exports
 
 When extending these contracts, preserve existing property meanings so saved
 Blender files remain usable by later versions.

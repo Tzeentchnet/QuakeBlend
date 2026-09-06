@@ -2,10 +2,10 @@
 ``.map`` file targeting Q1, Q2, or Q3.
 
 The source of truth is the **original ``.map`` file path cached on the root
-collection at import time** (see ``import_runner_map.run``). Blender mesh
-edits to brush geometry are NOT reflected in the export. Optional entity
-property edits (origin, classname) can be folded in via
-``use_scene_entity_edits``.
+collection at import time** (see ``import_runner_map.run``). Mesh edits are
+not exported. The experimental ``use_brush_transforms`` option applies object
+transforms to unchanged source-backed Q1/Q2 brushes after strict validation.
+Entity property edits can be folded in via ``use_scene_entity_edits``.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from pathlib import Path
 import bpy
 from bpy_extras.io_utils import ExportHelper
 
-from ..formats import map_convert, map_q1, map_writer
+from ..formats import map_convert, map_q1, map_writer, map_transform
 from ..utils.constants import DEFAULT_PATCH_LEVEL
 
 
@@ -175,6 +175,11 @@ class EXPORT_OT_quake_map(bpy.types.Operator, ExportHelper):
         subtype="FILE_PATH",
         default="",
     )
+    use_brush_transforms: bpy.props.BoolProperty(  # type: ignore[valid-type]
+        name="Apply brush transforms (experimental)",
+        description="Q1/Q2 same-game Valve220 export of unchanged brushes with object transforms only",
+        default=False,
+    )
     use_scene_entity_edits: bpy.props.BoolProperty(  # type: ignore[valid-type]
         name="Apply entity edits from scene",
         description=(
@@ -215,10 +220,27 @@ class EXPORT_OT_quake_map(bpy.types.Operator, ExportHelper):
 
         # Re-parse the cached source file.
         try:
-            mf = map_q1.parse_path(source_path)
+            source_bytes = Path(source_path).read_bytes()
+            mf = map_q1.parse(source_bytes.decode("latin-1"))
         except (OSError, ValueError) as exc:
             self.report({"ERROR"}, f"Failed to re-parse source MAP: {exc}")
             return {"CANCELLED"}
+
+        if self.use_brush_transforms:
+            from . import map_scene_export
+            try:
+                if source_game not in ("q1", "q2") or target != source_game or self.projection != "VALVE220":
+                    raise ValueError("Brush transforms require same-game Q1/Q2 output and explicit Valve220 projection")
+                if self.texture_map_path:
+                    raise ValueError("Texture remapping is unsupported with brush transforms")
+                if Path(self.filepath).resolve() == Path(source_path).resolve():
+                    raise ValueError("Transform export cannot overwrite its source MAP")
+                context.view_layer.update()
+                map_scene_export.apply_transforms(mf, coll, source_bytes,
+                                                  entity_edits=self.use_scene_entity_edits)
+            except (ValueError, KeyError, TypeError) as exc:
+                self.report({"ERROR"}, f"Brush transform export rejected: {exc}")
+                return {"CANCELLED"}
 
         # Optional entity overlay from scene objects.
         if self.use_scene_entity_edits:
@@ -306,6 +328,9 @@ class EXPORT_OT_quake_map(bpy.types.Operator, ExportHelper):
             self.report({"WARNING"}, warning)
 
         try:
+            if self.use_brush_transforms:
+                text = map_writer.serialize(converted, dialect=target, projection=proj)
+                map_transform.validate_serialized(converted, text)
             map_writer.serialize_path(converted,
                                       os.fspath(self.filepath),
                                       dialect=target,  # type: ignore[arg-type]

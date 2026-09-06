@@ -8,8 +8,10 @@ import bpy
 from bpy_extras.io_utils import ImportHelper
 
 from ..utils.constants import DEFAULT_IMPORT_SCALE, DEFAULT_PATCH_LEVEL
+from .import_options import configure_import_operator
 
 
+@configure_import_operator()
 class IMPORT_OT_quake_map(bpy.types.Operator, ImportHelper):
     bl_idname = "quakeblend.import_map"
     bl_label = "Import Quake MAP"
@@ -43,6 +45,12 @@ class IMPORT_OT_quake_map(bpy.types.Operator, ImportHelper):
         subtype="DIR_PATH",
         default="",
     )
+    q3_material_mode: bpy.props.EnumProperty(
+        name="Q3 materials",
+        items=(("SHADERS", "Shaders", "Use scripts and textures from a prepared asset root; skies deferred"),
+               ("DIRECT", "Direct images", "Legacy same-name images only")),
+        default="SHADERS",
+    )
     wad_paths: bpy.props.StringProperty(  # type: ignore[valid-type]
         name="WAD files",
         description="Semicolon-separated list of Quake 1 .wad files to consult",
@@ -54,6 +62,10 @@ class IMPORT_OT_quake_map(bpy.types.Operator, ImportHelper):
     )
     import_lights: bpy.props.BoolProperty(  # type: ignore[valid-type]
         name="Import lights",
+        default=True,
+    )
+    import_cameras: bpy.props.BoolProperty(  # type: ignore[valid-type]
+        name="Import cameras",
         default=True,
     )
     light_energy: bpy.props.FloatProperty(  # type: ignore[valid-type]

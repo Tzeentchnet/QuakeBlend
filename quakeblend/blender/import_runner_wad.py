@@ -24,7 +24,10 @@ def run(operator: bpy.types.Operator, context: bpy.types.Context, filepath: str)
         default_pal = palette_mod.load_bundled("q1")
         count = 0
         for mt in archive.textures:
-            pal = palette_mod.from_bytes(mt.palette) if mt.palette else default_pal
+            pal = (
+                palette_mod.from_bytes(mt.palette, fullbright=())
+                if mt.palette else default_pal
+            )
             source_key = qb_paths.file_asset_key(
                 path,
                 namespace="wad",
