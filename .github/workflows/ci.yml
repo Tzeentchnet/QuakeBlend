@@ -134,3 +134,14 @@ jobs:
           if (($output -join "`n") -notmatch "QUAKEBLEND_SMOKE_OK") {
             throw "Blender smoke tests did not emit the success marker"
           }
+
+          $mergedOutput = & blender --background --python scripts/blender_merged_world_smoke.py -- `
+            --extension-root bl_ext.user_default.quakeblend 2>&1
+          $mergedExitCode = $LASTEXITCODE
+          $mergedOutput | ForEach-Object { Write-Host $_ }
+          if ($mergedExitCode -ne 0) {
+            throw "Blender merged-world smoke tests failed with exit code $mergedExitCode"
+          }
+          if (($mergedOutput -join "`n") -notmatch "MERGED_WORLD_SMOKE_OK") {
+            throw "Blender merged-world smoke tests did not emit the success marker"
+          }

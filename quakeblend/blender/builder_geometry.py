@@ -37,8 +37,38 @@ def build_map_brush(brush: MapBrush, faces: Sequence[BrushFace], name: str,
     ``faces`` are the polygons produced by :func:`quakeblend.formats.csg.brush_faces`
     in the same order as ``brush.faces``.
     """
-    valid = [(index, face) for index, face in enumerate(faces) if len(face.vertices) >= 3]
-    if not valid:
+    return _build_map_brushes(
+        ((None, brush, faces),), name, collection, materials,
+        scale=scale, create_materials=create_materials,
+    )
+
+
+def build_merged_map_brushes(
+        brushes: Sequence[tuple[int, MapBrush, Sequence[BrushFace]]],
+        name: str, collection: bpy.types.Collection,
+        materials: builder_materials.MaterialCache,
+        *, scale: float, create_materials: bool = True,
+        source_entity_index: int = 0) -> bpy.types.Object | None:
+    """Build one mesh with face provenance for several source brushes."""
+    return _build_map_brushes(
+        brushes, name, collection, materials,
+        scale=scale, create_materials=create_materials,
+        source_entity_index=source_entity_index,
+    )
+
+
+def _build_map_brushes(
+        brushes: Sequence[tuple[int | None, MapBrush, Sequence[BrushFace]]],
+        name: str, collection: bpy.types.Collection,
+        materials: builder_materials.MaterialCache,
+        *, scale: float, create_materials: bool,
+        source_entity_index: int | None = None) -> bpy.types.Object | None:
+    valid_brushes = [
+        (brush_index, [(index, face) for index, face in enumerate(faces)
+                       if len(face.vertices) >= 3])
+        for brush_index, _brush, faces in brushes
+    ]
+    if not any(valid for _brush_index, valid in valid_brushes):
         return None
 
     obj = _new_mesh_object(name, collection)
@@ -46,54 +76,67 @@ def build_map_brush(brush: MapBrush, faces: Sequence[BrushFace], name: str,
 
     # Material slots (preserve order; first occurrence wins).
     slot_index: dict[str, int] = {}
-    for _, face in valid:
-        if create_materials and face.texture and face.texture not in slot_index:
-            slot_index[face.texture] = len(slot_index)
-            mat = materials.get(face.texture)
-            if mat is not None:
-                obj.data.materials.append(mat)
-            else:
-                obj.data.materials.append(
-                    builder_materials.get_or_create_placeholder_material(
-                        face.texture,
-                        asset_key=f"placeholder|map|{face.texture.casefold()}",
+    for _brush_index, valid in valid_brushes:
+        for _, face in valid:
+            if create_materials and face.texture and face.texture not in slot_index:
+                slot_index[face.texture] = len(slot_index)
+                mat = materials.get(face.texture)
+                if mat is not None:
+                    obj.data.materials.append(mat)
+                else:
+                    obj.data.materials.append(
+                        builder_materials.get_or_create_placeholder_material(
+                            face.texture,
+                            asset_key=f"placeholder|map|{face.texture.casefold()}",
+                        )
                     )
-                )
-                slot_index[face.texture] = len(obj.data.materials) - 1
+                    slot_index[face.texture] = len(obj.data.materials) - 1
 
     uv_layer = bm.loops.layers.uv.new("UVMap")
     source_layer = bm.faces.layers.int.new("qb_source_face")
+    brush_layer = (
+        bm.faces.layers.int.new("qb_source_brush")
+        if source_entity_index is not None else None
+    )
+    entity_layer = (
+        bm.faces.layers.int.new("qb_source_entity")
+        if source_entity_index is not None else None
+    )
     width_layer = bm.faces.layers.int.new("qb_texture_width")
     height_layer = bm.faces.layers.int.new("qb_texture_height")
-    bm_vertex_by_position = {}
-    for source_index, face in valid:
-        bm_verts = []
-        for vertex in face.vertices:
-            position = (vertex.x * scale, vertex.y * scale, vertex.z * scale)
-            bm_vertex = bm_vertex_by_position.get(position)
-            if bm_vertex is None:
-                bm_vertex = bm.verts.new(position)
-                bm_vertex_by_position[position] = bm_vertex
-            bm_verts.append(bm_vertex)
-        try:
-            bm_face = bm.faces.new(bm_verts)
-        except ValueError:
-            # Duplicate face — possible on coplanar brush parts; skip.
-            continue
-        bm_face[source_layer] = source_index
-        dimensions = (face.metadata or {}).get("tex_size", (64, 64))
-        bm_face[width_layer], bm_face[height_layer] = dimensions
-        if face.texture and face.texture in slot_index:
-            bm_face.material_index = slot_index[face.texture]
-        # UVs (Standard or Valve220 — see _project_uv below).
-        # We need the original MapBrush texinfo, attached via face.metadata.
-        if face.metadata and "tex" in face.metadata:
-            tex: MapTexInfo = face.metadata["tex"]
-            tex_size = face.metadata.get("tex_size", (64, 64))
-            normal = face.metadata.get("normal")
-            for loop, vert in zip(bm_face.loops, face.vertices):
-                u, v = _project_uv(tex, vert, tex_size, normal)
-                loop[uv_layer].uv = (u, 1.0 - v)
+    for brush_index, valid in valid_brushes:
+        bm_vertex_by_position = {}
+        for source_index, face in valid:
+            bm_verts = []
+            for vertex in face.vertices:
+                position = (vertex.x * scale, vertex.y * scale, vertex.z * scale)
+                bm_vertex = bm_vertex_by_position.get(position)
+                if bm_vertex is None:
+                    bm_vertex = bm.verts.new(position)
+                    bm_vertex_by_position[position] = bm_vertex
+                bm_verts.append(bm_vertex)
+            try:
+                bm_face = bm.faces.new(bm_verts)
+            except ValueError:
+                # Duplicate face — possible on coplanar brush parts; skip.
+                continue
+            bm_face[source_layer] = source_index
+            if brush_layer is not None and entity_layer is not None:
+                bm_face[brush_layer] = brush_index
+                bm_face[entity_layer] = source_entity_index
+            dimensions = (face.metadata or {}).get("tex_size", (64, 64))
+            bm_face[width_layer], bm_face[height_layer] = dimensions
+            if face.texture and face.texture in slot_index:
+                bm_face.material_index = slot_index[face.texture]
+            # UVs (Standard or Valve220 — see _project_uv below).
+            # We need the original MapBrush texinfo, attached via face.metadata.
+            if face.metadata and "tex" in face.metadata:
+                tex: MapTexInfo = face.metadata["tex"]
+                tex_size = face.metadata.get("tex_size", (64, 64))
+                normal = face.metadata.get("normal")
+                for loop, vert in zip(bm_face.loops, face.vertices):
+                    u, v = _project_uv(tex, vert, tex_size, normal)
+                    loop[uv_layer].uv = (u, 1.0 - v)
 
     bm.normal_update()
     bm.to_mesh(obj.data)

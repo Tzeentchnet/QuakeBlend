@@ -4,6 +4,10 @@ QuakeBlend imports Quake 1, Quake 2, and Quake 3 level data and textures, plus
 GoldSrc BSP v30 levels, into Blender. Its operators are available under
 **File > Import**.
 
+MAP, BSP, WAD, and WAL imports update Blender's progress indicator while they
+run. The indicator is cleared after both successful imports and reported
+failures; imports remain synchronous and do not add cancellation controls.
+
 ## Global defaults
 
 Open **Edit > Preferences > Add-ons**, expand **QuakeBlend**, and configure
@@ -13,8 +17,10 @@ imports. Save Preferences if Blender's automatic preference saving is disabled.
 
 MAP and BSP lighting have separate defaults: Blender Lighting for MAP, Fullbright
 for BSP. The MAP lighting selector does not offer Baked. Clip/hint defaults apply
-only to MAP; landmark stitching applies only to GoldSrc BSP. Source-game selection
-and the scene-specific stitch target remain per-import choices.
+only to MAP, as does the MAP geometry default; landmark stitching applies only
+to GoldSrc BSP. Source-game selection and the scene-specific stitch target remain
+per-import choices. **Replace Existing Q1/Q2/Q3** is off by default, preserving
+the additive behavior of repeated imports.
 
 Explicit arguments supplied to an interactive invocation override preferences.
 After the dialog opens, per-import edits and loaded operator presets take
@@ -32,6 +38,12 @@ new settings. Disabled controls retain their values.
 
 - **Worldspawn Only** is off by default. It excludes non-world brush geometry
   and all entity objects, including lights and cameras.
+- **Geometry** is a MAP-only choice. **Per Brush** remains the default and
+  creates one mesh object per brush. **Merged World** joins standard worldspawn
+  brushes by effective tool visibility while keeping brush entities and Q3
+  patches as separate, selectable objects. Maps with only ordinary visible
+  brushes still produce one merged mesh; hidden tool brushes use a separate
+  hidden mesh when both dispositions are present.
 - **Collections** is on by default. It organizes objects in subcollections.
   Turning it off links objects directly to the import root without changing
   transforms or parenting. GoldSrc assembly roots are preserved.
@@ -59,6 +71,32 @@ Import roots record settings in `qb_import_options` and tool-object counts in
 Skip differs from hiding: [transform export](exporting.md) requires a complete
 brush import, while normal source-based export still retains skipped source data.
 
+## Replacing an existing import
+
+Enable **Replace Existing Import** in the Source panel to replace a prior MAP or
+Q1/Q2/Q3 BSP import from the same canonical source path. The option is disabled
+by default, so importing the same file repeatedly continues to create duplicate
+root collections. It can also be configured as a global default under
+**Replace Existing Q1/Q2/Q3** in the add-on preferences.
+
+Replacement uses `qb_source_identity`, the import kind, and a supported
+`qb_source_game` to find eligible root collections across the blend file.
+Exactly one existing root must match. Zero matches or multiple matches cancel
+before the importer creates or removes any datablocks, with an error identifying
+the source and match count.
+
+The replacement import is built first inside the normal import transaction. If
+parsing, material creation, or geometry construction fails, every newly created
+datablock is rolled back and the old root remains intact. Only after a complete
+new import succeeds does QuakeBlend remove the old object/collection hierarchy
+and its unused object-data, node-group, and action blocks. Existing materials and
+images are retained so assets shared with the new import or unrelated scene
+content remain valid. The new root receives the old root's exact name.
+
+GoldSrc replacement is explicitly unsupported and deferred. Enabling the option
+for a GoldSrc BSP cancels before import; normal GoldSrc imports remain available
+with replacement disabled.
+
 ## Quake MAP
 
 Use **Quake MAP (.map)** to import text-based Q1, Q2, or Q3 MAP files. Brushes
@@ -68,9 +106,15 @@ are converted from CSG planes into Blender meshes.
 
 - **Scale** controls the world-unit conversion. The default is `1/32`, so 32
   Quake units become one Blender meter.
+- **Replace Existing Import** applies the transactional exact-one replacement
+  behavior described above. It is disabled by default.
 - **Source game** selects `Auto`, `Quake 1`, `Quake 2`, or `Quake 3`. Auto
   detects Q2 face trailers, Q3 `brushDef3` and `patchDef2` blocks, and
   path-like Q3 shader names. Ambiguous files fall back to Q1 behavior.
+- **Geometry** selects **Per Brush** or **Merged World**. Merged World preserves
+  each face's source provenance, material assignment, and UVs, and partitions
+  visible and hidden worldspawn brushes into separate merged objects. It does
+  not merge brush entities or patches.
 - **Texture root** selects a folder searched recursively for external Q2 WAL
   and Q3 image textures. When blank, QuakeBlend uses the default texture root
   from its add-on preferences.
@@ -92,8 +136,16 @@ are converted from CSG planes into Blender meshes.
 Standard and Valve220 texture projection are detected independently for each
 face. The root collection records the file summary as `qb_source_projection`,
 whose value is `standard`, `valve220`, or `mixed`. It also stores the source
-path, detected game, and import scale as `qb_source_map`, `qb_source_game`,
-and `qb_import_scale` for later MAP export.
+path, canonical path identity, detected game, import scale, and geometry mode as
+`qb_source_map`, `qb_source_identity`, `qb_source_game`, `qb_import_scale`, and
+`qb_geometry_mode` for later MAP export and inspection.
+
+Merged world meshes retain `qb_source_entity`, `qb_source_brush`, and
+`qb_source_face` integer face attributes. `qb_texture_width` and
+`qb_texture_height` remain face attributes, `qb_brush_indices` lists the joined
+source brushes, and `qb_source_brush_face_offsets` indexes their flattened
+source-face metadata. Coincident vertices from different brushes remain
+disconnected so brush provenance is not collapsed.
 
 When **Source game** is Auto, external texture lookup probes both WAL and
 image formats because an otherwise ordinary Q3 MAP can be syntactically
@@ -112,7 +164,9 @@ export. Brush objects expose values in source-face order through:
 
 These arrays follow source brush faces, not generated mesh polygons. CSG can
 discard a source face when it is clipped away, so the two orders are not
-interchangeable.
+interchangeable. On a Merged World object the arrays are flattened in
+`qb_brush_indices` order; `qb_source_brush_face_offsets` identifies each
+brush's range.
 
 Synthetic parser, importer, exporter, and compiler-fixture tests cover retained
 Q2 trailers and polygon-to-source association. Texture dimensions and appearance
@@ -206,6 +260,12 @@ owner's `qb_prop_<key>` values.
 
 Q3 triangle soups, mesh vertices, and curved patch faces are converted to
 Blender geometry. Patch faces use the operator's tessellation level.
+
+Q1, Q2, and Q3 BSP root collections store the resolved source path in
+`qb_source_bsp`, its canonical identity in `qb_source_identity`, and the
+detected game in `qb_source_game`. Canonical identities use portable separators
+and the host platform's path-case rules. Repeated imports remain additive unless
+**Replace Existing Import** is enabled.
 
 ### GoldSrc BSP
 

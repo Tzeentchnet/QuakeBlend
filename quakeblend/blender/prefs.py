@@ -72,7 +72,13 @@ class QuakeBlendPreferences(bpy.types.AddonPreferences):
         layout.separator()
         layout.label(text="Import Defaults")
         layout.prop(self, "default_scale")
+        layout.prop(
+            self,
+            "default_replace_existing",
+            text="Replace Existing Q1/Q2/Q3",
+        )
         layout.prop(self, "default_worldspawn_only")
+        layout.prop(self, "default_geometry_mode", text="MAP Geometry")
         layout.prop(self, "default_group_entities", text="Collections")
         content = layout.column()
         content.enabled = not self.default_worldspawn_only

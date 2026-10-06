@@ -57,6 +57,8 @@ separates source metadata/projection sizes from material creation, using the bou
 image-header reader in `formats/image_info.py`. The Blender `import_options.py`
 adapter owns native controls, collection organization and per-object viewport
 hiding. BSP UI detection reads only the header when file selection changes.
+`utils/paths.py` resolves persisted source paths and derives canonical identities
+with portable separators and the host platform's path-case rules.
 
 `blender/prefs.py` stores interactive import defaults and reuses shared property
 definitions from the Blender import-options adapter. The operator `invoke` hook
@@ -92,7 +94,9 @@ QuakeBlend custom properties use the `qb_` prefix. These properties retain
 source identity and metadata needed across modules without mixing project
 keys with Blender's own names. Examples include:
 
-- `qb_source_map`, `qb_source_game`, and `qb_import_scale` on MAP roots
+- `qb_source_map` or `qb_source_bsp`, `qb_source_identity`, and
+  `qb_source_game` on MAP and Q1/Q2/Q3 BSP roots
+- `qb_import_scale` on MAP roots
 - `qb_entity_index` and `qb_prop_<key>` on entity anchors
 - `qb_bsp_model_index` on BSP geometry
 - `qb_patch_control_grid` and `qb_patch_size` on imported patches

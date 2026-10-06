@@ -7,6 +7,8 @@ import os
 import bpy
 from bpy_extras.io_utils import ImportHelper
 
+from ..utils import log as qb_log
+
 
 class IMPORT_OT_quake_wad(bpy.types.Operator, ImportHelper):
     bl_idname = "quakeblend.import_wad"
@@ -31,7 +33,7 @@ class IMPORT_OT_quake_wad(bpy.types.Operator, ImportHelper):
             with ImportTransaction():
                 count = import_runner_wad.run(self, context, os.fspath(self.filepath))
         except Exception as exc:  # pragma: no cover
-            self.report({"ERROR"}, f"Texture import failed: {exc}")
+            qb_log.report_exception(self, f"Texture import failed: {exc}")
             return {"CANCELLED"}
         self.report({"INFO"}, f"Imported {count} texture(s)")
         return {"FINISHED"}

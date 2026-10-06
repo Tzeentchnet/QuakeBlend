@@ -57,6 +57,17 @@ def _quote(s: str) -> str:
     return '"' + escaped + '"'
 
 
+def _encode_map_text(text: str) -> bytes:
+    try:
+        return text.encode("latin-1", errors="strict")
+    except UnicodeEncodeError as exc:
+        unsupported = text[exc.start:exc.end]
+        raise ValueError(
+            "MAP text contains characters outside Latin-1 at "
+            f"offset {exc.start}: {unsupported!r}"
+        ) from exc
+
+
 def _as_valve220(face: MapFace) -> MapFace:
     if face.tex.is_valve220:
         return face
@@ -320,8 +331,8 @@ def serialize(mf: MapFile, *, dialect: Dialect = "q1",
 
 
 def serialize_path(mf: MapFile, path: str | Path, **kwargs) -> None:
-    """Serialize ``mf`` and atomically replace ``path`` with UTF-8 text."""
-    text = serialize(mf, **kwargs)
+    """Serialize ``mf`` and atomically replace ``path`` with Latin-1 text."""
+    data = _encode_map_text(serialize(mf, **kwargs))
     destination = Path(path)
     descriptor, temp_name = tempfile.mkstemp(
         dir=destination.parent,
@@ -331,7 +342,7 @@ def serialize_path(mf: MapFile, path: str | Path, **kwargs) -> None:
     os.close(descriptor)
     temporary = Path(temp_name)
     try:
-        temporary.write_text(text, encoding="utf-8", newline="\n")
+        temporary.write_bytes(data)
         os.replace(temporary, destination)
     finally:
         temporary.unlink(missing_ok=True)

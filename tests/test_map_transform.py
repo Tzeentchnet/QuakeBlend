@@ -70,8 +70,14 @@ def test_duplicate_plane_rejected():
         map_transform.transform_brush(brush, columns(), Vec3(0, 0, 0))
 
 
-def test_serialized_encoding_change_rejected():
+def test_serialized_latin_1_round_trip():
     result = map_transform.transform_brush(cube(), columns(), Vec3(0, 0, 0))
     level = map_q1.MapFile([map_q1.MapEntity({"classname": "worldspawn", "message": "caf\u00e9"}, [result])])
-    with pytest.raises(ValueError, match="properties"):
+    map_transform.validate_serialized(level, map_writer.serialize(level, projection="valve220"))
+
+
+def test_serialized_non_latin_1_rejected():
+    result = map_transform.transform_brush(cube(), columns(), Vec3(0, 0, 0))
+    level = map_q1.MapFile([map_q1.MapEntity({"classname": "worldspawn", "message": "snowman \u2603"}, [result])])
+    with pytest.raises(ValueError, match="outside Latin-1"):
         map_transform.validate_serialized(level, map_writer.serialize(level, projection="valve220"))

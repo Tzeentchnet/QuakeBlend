@@ -13,17 +13,25 @@ Repository: <https://github.com/Tzeentchnet/QuakeBlend>
 
 ## Capabilities
 
-* Import Quake 1, Quake 2, and Quake 3 `.map` and `.bsp` levels.
+* Import Quake 1 MAP and BSP29, Quake 2 MAP and IBSP38, and Quake 3 MAP and
+  IBSP46 levels.
 * Import GoldSrc BSP v30 geometry, embedded palettes, configured WAD3 textures,
   and entity metadata. See the [GoldSrc limitations](docs/importing.md#goldsrc-bsp).
 * Optionally align connected GoldSrc maps using changelevel landmarks, with
   explicit target selection for duplicate imports.
 * Convert CSG brushes, Q3 `brushDef3` geometry, and `patchDef2` surfaces into
   Blender meshes.
-* Load Q1 WAD2/WAD3, Q2 WAL, and Q3 image textures with game-aware material
-  handling.
+* Keep one object per MAP brush by default, or merge standard worldspawn
+  brushes into one mesh while leaving brush entities and patches separate.
+* Load Quake 1 WAD2, GoldSrc WAD3, Quake 2 WAL, and Quake 3 images and shader
+  definitions with game-aware material handling.
 * Import entities as lights, cameras, and empties while preserving their
   properties and BSP submodels.
+* Optionally replace exactly one prior import of the same MAP or Quake 1/2/3
+  BSP source. Duplicate imports remain the default; GoldSrc replacement is not
+  supported.
+* Report import progress and roll back newly created Blender datablocks when an
+  import fails.
 * Export imported MAP sources with Q1, Q2, and Q3 conversion, patch handling,
   texture remapping, and optional entity edits.
 * Experimentally export object transforms on unchanged source-backed Q1/Q2
@@ -49,6 +57,12 @@ To build an installable archive from source:
 git clone https://github.com/Tzeentchnet/QuakeBlend.git
 cd QuakeBlend
 pwsh ./scripts/build_extension.ps1
+```
+
+On Windows PowerShell, use:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\build_extension.ps1
 ```
 
 The script writes `dist/quakeblend-<version>.zip`. See the

@@ -20,6 +20,7 @@ from ..utils.map_resources import MapResources
 from ..utils.q3_assets import Q3Assets
 from .import_options import ImportState
 from . import builder_entities, builder_geometry, builder_materials, builder_q3_materials, map_scene_export
+from .import_progress import ImportProgress
 from .prefs import get_prefs
 
 
@@ -144,7 +145,47 @@ def _tag_face_surface_flags(obj: bpy.types.Object, brush: map_q1.MapBrush) -> No
     obj["qb_face_value"] = [int(face.tex.value) for face in brush.faces]
 
 
+def _tag_merged_world(obj: bpy.types.Object, entity_index: int, brushes) -> None:
+    obj["qb_owner_entity_index"] = entity_index
+    obj["qb_brush_indices"] = [brush_index for brush_index, _brush, _faces in brushes]
+    offsets = [0]
+    source_faces = []
+    for _brush_index, brush, _faces in brushes:
+        source_faces.extend(brush.faces)
+        offsets.append(len(source_faces))
+    obj["qb_source_brush_face_offsets"] = offsets
+    obj["qb_face_textures"] = "\n".join(face.tex.name for face in source_faces)
+    if any(face.tex.has_q2_trailing_fields for face in source_faces):
+        obj["qb_face_contents"] = [int(face.tex.contents) for face in source_faces]
+        obj["qb_face_flags"] = [int(face.tex.surface_flags) for face in source_faces]
+        obj["qb_face_value"] = [int(face.tex.value) for face in source_faces]
+
+
+def _mark_merged_world(state: ImportState, obj: bpy.types.Object, category_sets) -> None:
+    categories = set().union(*category_sets) if category_sets else set()
+    if not categories:
+        return
+    dispositions = [
+        state.options.disposition(brush_categories) if brush_categories else "VISIBLE"
+        for brush_categories in category_sets
+    ]
+    for brush_categories, disposition in zip(category_sets, dispositions):
+        if brush_categories:
+            state.counts[disposition.lower()] += 1
+    obj["qb_tool_categories"] = ",".join(sorted(categories))
+    unique = set(dispositions)
+    obj["qb_tool_handling"] = unique.pop() if len(unique) == 1 else "MIXED"
+    if dispositions and all(disposition == "HIDDEN" for disposition in dispositions):
+        state.hidden.append(obj)
+
+
 def run(operator: bpy.types.Operator, context: bpy.types.Context, filepath: str) -> None:
+    with ImportProgress(context.window_manager) as progress:
+        _run(operator, context, filepath, progress=progress)
+
+
+def _run(operator: bpy.types.Operator, context: bpy.types.Context, filepath: str,
+         *, progress: ImportProgress) -> None:
     state = ImportState(operator, context)
     options = state.options
     scale = float(getattr(operator, "scale", 1.0 / 32.0))
@@ -171,6 +212,7 @@ def run(operator: bpy.types.Operator, context: bpy.types.Context, filepath: str)
         raise ValueError(f"unsupported MAP source game {source_game!r}")
     if options.worldspawn_only and (not mf.entities or mf.entities[0].properties.get("classname", "").casefold() != "worldspawn"):
         raise ValueError("Worldspawn Only requires the first MAP entity to be worldspawn")
+    progress.phase(150)
     shader_mode = source_game == "q3" and getattr(operator, "q3_material_mode", "SHADERS") == "SHADERS"
     q3_materials = (builder_q3_materials.Q3Materials(texture_root, context.scene,
         source_key=hashlib.sha256(source_bytes).hexdigest(), scale=scale, **options.shader_kwargs())
@@ -196,6 +238,7 @@ def run(operator: bpy.types.Operator, context: bpy.types.Context, filepath: str)
     q2_palette = palette_mod.load_bundled("q2") if texture_root is not None else None
     resources = MapResources(texture_index, source_game, external_texture_kind,
         sizes=sizes, q3_assets=q3_assets, shader_mode=shader_mode, warn=state.warn)
+    progress.phase(300)
 
     scene = context.scene
     root = bpy.data.collections.new(map_path.stem)
@@ -203,9 +246,12 @@ def run(operator: bpy.types.Operator, context: bpy.types.Context, filepath: str)
 
     # Cache the source path + detected game so the export operator can later
     # re-parse the original file as its source of truth.
-    root["qb_source_map"] = str(map_path.resolve())
+    source_path = qb_paths.resolved_source_path(map_path)
+    root["qb_source_map"] = str(source_path)
+    root["qb_source_identity"] = qb_paths.canonical_source_identity(source_path)
     root["qb_source_game"] = source_game
     root["qb_import_scale"] = scale
+    root["qb_geometry_mode"] = options.geometry_mode
     root["qb_map_import_id"] = uuid4().hex
     root["qb_source_sha256"] = hashlib.sha256(source_bytes).hexdigest()
     root["qb_transform_scale"] = scale
@@ -221,7 +267,11 @@ def run(operator: bpy.types.Operator, context: bpy.types.Context, filepath: str)
         next(iter(projections)) if len(projections) == 1 else "mixed"
     )
 
+    work_total = sum(len(entity.brushes) + 1 for entity in mf.entities)
+    work_completed = 0
     for ent_idx, entity in enumerate(mf.entities):
+        work_completed += 1
+        progress.update(work_completed, work_total, start=300, end=900)
         classname = entity.properties.get("classname", f"entity_{ent_idx}")
         entity_categories = {"trigger"} if is_trigger(entity.properties) else set()
         if (options.worldspawn_only and ent_idx != 0) or options.disposition(entity_categories) == "SKIP":
@@ -229,10 +279,16 @@ def run(operator: bpy.types.Operator, context: bpy.types.Context, filepath: str)
                 root["qb_omitted_brushes"][f"{ent_idx}:{brush_idx}"] = "Entity excluded"
             if entity_categories and not options.worldspawn_only:
                 state.counts["skipped"] += (len(entity.brushes) if options.import_brush_entities else 0) + int(options.import_entities)
+            work_completed += len(entity.brushes)
+            progress.update(work_completed, work_total, start=300, end=900)
             continue
         ent_coll = state.collection(root, f"{ent_idx:04d}_{classname}")
+        merged_world_brushes = {"VISIBLE": [], "HIDDEN": []}
+        merged_world_categories = {"VISIBLE": [], "HIDDEN": []}
 
         for brush_idx, brush in enumerate(entity.brushes):
+            work_completed += 1
+            progress.update(work_completed, work_total, start=300, end=900)
             if ent_idx != 0 and not options.import_brush_entities:
                 root["qb_omitted_brushes"][f"{ent_idx}:{brush_idx}"] = "Brush entities excluded"
                 continue
@@ -255,7 +311,8 @@ def run(operator: bpy.types.Operator, context: bpy.types.Context, filepath: str)
             categories = categories | entity_categories
             if diagnostic:
                 state.warn(f"Entity {ent_idx} brush {brush_idx}: {diagnostic}")
-            if options.disposition(categories) == "SKIP":
+            disposition = options.disposition(categories)
+            if disposition == "SKIP":
                 root["qb_omitted_brushes"][f"{ent_idx}:{brush_idx}"] = ",".join(sorted(categories))
                 state.counts["skipped"] += 1
                 continue
@@ -313,6 +370,11 @@ def run(operator: bpy.types.Operator, context: bpy.types.Context, filepath: str)
                         "normal": src.plane.normal,
                     },
                 ))
+            if (options.geometry_mode == "MERGED_WORLD" and ent_idx == 0
+                    and classname.casefold() == "worldspawn"):
+                merged_world_brushes[disposition].append((brush_idx, brush, enriched))
+                merged_world_categories[disposition].append(categories)
+                continue
             obj = builder_geometry.build_map_brush(
                 brush, enriched, f"{classname}_brush_{brush_idx}",
                 ent_coll, materials, scale=scale, create_materials=options.create_materials,
@@ -323,6 +385,26 @@ def run(operator: bpy.types.Operator, context: bpy.types.Context, filepath: str)
                 _tag_face_surface_flags(obj, brush)
                 map_scene_export.capture_brush(root, obj)
                 state.mark(obj, categories)
+                if q3_materials:
+                    q3_materials.apply(obj)
+
+        for disposition in ("VISIBLE", "HIDDEN"):
+            brushes = merged_world_brushes[disposition]
+            if not brushes:
+                continue
+            hidden_suffix = (
+                "_hidden"
+                if disposition == "HIDDEN" and merged_world_brushes["VISIBLE"]
+                else ""
+            )
+            obj = builder_geometry.build_merged_map_brushes(
+                brushes, f"{classname}_merged{hidden_suffix}", ent_coll, materials,
+                scale=scale, create_materials=options.create_materials,
+                source_entity_index=ent_idx,
+            )
+            if obj is not None:
+                _tag_merged_world(obj, ent_idx, brushes)
+                _mark_merged_world(state, obj, merged_world_categories[disposition])
                 if q3_materials:
                     q3_materials.apply(obj)
 
@@ -359,6 +441,7 @@ def run(operator: bpy.types.Operator, context: bpy.types.Context, filepath: str)
         root["qb_q3_material_mode"] = "SHADERS"
         for name, diagnostic in q3_materials.diagnostics.items():
             qb_log.report(operator, {"WARNING"}, f"Q3 shader {name}: {diagnostic}")
+    progress.phase(950)
     state.finish(root)
 
 

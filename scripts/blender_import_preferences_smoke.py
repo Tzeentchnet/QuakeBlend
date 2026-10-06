@@ -73,11 +73,15 @@ def main():
     prefs = prefs_module.get_prefs(bpy.context)
     assert prefs is not None
     if args.persist != "read":
+        assert not prefs.default_replace_existing
+        assert prefs.default_geometry_mode == "PER_BRUSH"
         assert prefs.default_q3_bsp_lighting == "FULLBRIGHT"
         assert prefs.default_q3_map_lighting == "RELIT"
         assert prefs.default_trigger_handling == prefs.default_clip_handling == prefs.default_hint_handling == "HIDDEN"
     original = {name: getattr(prefs, f"default_{name}") for name in prefs_module.IMPORT_DEFAULT_NAMES}
-    choices = {"worldspawn_only": True, "group_entities": False, "create_materials": False,
+    choices = {"replace_existing": True, "worldspawn_only": True,
+               "group_entities": False, "geometry_mode": "MERGED_WORLD",
+               "create_materials": False,
                "import_brush_entities": False, "import_entities": False, "import_lights": False,
                "import_cameras": False, "trigger_handling": "SKIP", "clip_handling": "VISIBLE",
                "hint_handling": "SKIP", "q3_map_lighting": "FULLBRIGHT", "q3_bsp_lighting": "BAKED",
@@ -87,11 +91,17 @@ def main():
         assert original == choices, (original, choices)
         print("IMPORT_PREFERENCES_REOPEN_OK", flush=True)
     captured = {}
+    goldsrc_opt_out = False
 
     def capture(operator, context, *unused):
+        nonlocal goldsrc_opt_out
         captured.clear()
         captured.update({name: getattr(operator, name)
                  for name in (*choices, "q3_lighting") if hasattr(operator, name)})
+        if hasattr(operator, "detected_game") and operator.replace_existing:
+            operator.detected_game = "GOLDSRC"
+            operator.replace_existing = False
+            goldsrc_opt_out = not operator.replace_existing
         return {"FINISHED"}
 
     previous_invoke = ImportHelper.invoke
@@ -106,9 +116,13 @@ def main():
             for name, value in captured.items():
                 expected = choices[f"q3_{kind}_lighting"] if name == "q3_lighting" else choices[name]
                 assert value == expected, (kind, name, value, expected)
-            assert operation("INVOKE_DEFAULT", worldspawn_only=False, create_materials=True,
+            if kind == "bsp":
+                assert goldsrc_opt_out
+            assert operation("INVOKE_DEFAULT", replace_existing=False,
+                worldspawn_only=False, create_materials=True,
                 q3_lighting="RELIT", trigger_handling="HIDDEN") == {"FINISHED"}
-            assert not captured["worldspawn_only"] and captured["create_materials"]
+            assert not captured["replace_existing"] and not captured["worldspawn_only"]
+            assert captured["create_materials"]
             assert captured["q3_lighting"] == "RELIT" and captured["trigger_handling"] == "HIDDEN"
             assert operation("INVOKE_DEFAULT") == {"FINISHED"}
             assert captured["worldspawn_only"] and not captured["create_materials"]
@@ -118,7 +132,8 @@ def main():
             try:
                 runner.run = capture
                 assert operation("EXEC_DEFAULT") == {"FINISHED"}
-                assert not captured["worldspawn_only"] and captured["create_materials"]
+                assert not captured["replace_existing"] and not captured["worldspawn_only"]
+                assert captured["create_materials"]
                 assert captured["q3_lighting"] == ("FULLBRIGHT" if kind == "bsp" else "RELIT")
             finally:
                 runner.run = previous_run
@@ -128,7 +143,7 @@ def main():
         ImportHelper.invoke = previous_invoke
         for name, value in original.items():
             setattr(prefs, f"default_{name}", value)
-    print("IMPORT_PREFERENCES_OK defaults explicit-overrides scripted-imports")
+    print("IMPORT_PREFERENCES_OK defaults explicit-overrides goldsrc-opt-out scripted-imports")
     if args.output_dir:
         capture_preferences(args.extension_root, args.output_dir)
     else:

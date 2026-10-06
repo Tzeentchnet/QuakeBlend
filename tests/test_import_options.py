@@ -10,6 +10,8 @@ from quakeblend.utils.import_options import ImportOptions, ToolSurface, classify
 def test_defaults_and_precedence():
     assert ImportOptions.from_operator(SimpleNamespace(), bsp=True).q3_lighting == "FULLBRIGHT"
     assert ImportOptions.from_operator(SimpleNamespace()).q3_lighting == "RELIT"
+    assert ImportOptions.from_operator(SimpleNamespace()).geometry_mode == "PER_BRUSH"
+    assert ImportOptions.from_operator(SimpleNamespace(geometry_mode="MERGED_WORLD")).geometry_mode == "MERGED_WORLD"
     options = ImportOptions(worldspawn_only=True, trigger_handling="SKIP")
     assert options.model_allowed(0, {})
     assert not options.model_allowed(1, {})
@@ -18,7 +20,8 @@ def test_defaults_and_precedence():
     assert ImportOptions(import_entities=False).model_allowed(1, {})
 
 
-@pytest.mark.parametrize("name,value", [("trigger_handling", "bad"), ("q3_lighting", "bad"), ("q3_lighting", "BAKED")])
+@pytest.mark.parametrize("name,value", [("trigger_handling", "bad"), ("geometry_mode", "bad"),
+    ("q3_lighting", "bad"), ("q3_lighting", "BAKED")])
 def test_invalid_options(name, value):
     with pytest.raises(ValueError):
         ImportOptions.from_operator(SimpleNamespace(**{name: value}))

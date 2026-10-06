@@ -10,6 +10,17 @@ from ..formats import map_transform
 from ..formats.common import Vec3
 
 
+def require_per_brush_geometry(collection):
+    mode = collection.get("qb_geometry_mode", "PER_BRUSH")
+    if mode == "MERGED_WORLD":
+        raise ValueError(
+            "Merged World imports cannot use brush transform export; "
+            "reimport with Geometry set to Per Brush"
+        )
+    if mode != "PER_BRUSH":
+        raise ValueError(f"Unknown MAP geometry mode {mode!r}; reimport the MAP")
+
+
 def mesh_signature(obj):
     mesh = obj.data
     attributes = {}
@@ -40,6 +51,7 @@ def capture_brush(root, obj):
 
 
 def apply_transforms(level, collection, source_bytes, *, entity_edits=False):
+    require_per_brush_geometry(collection)
     if collection.get("qb_omitted_brushes"):
         raise ValueError("Transform export requires a complete import; reimport with all brushes included (viewport hiding is allowed)")
     if (collection.get("qb_source_sha256") != hashlib.sha256(source_bytes).hexdigest()

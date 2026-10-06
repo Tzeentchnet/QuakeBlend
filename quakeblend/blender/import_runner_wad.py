@@ -11,15 +11,24 @@ from ..formats import wad as wad_mod
 from ..formats import wal as wal_mod
 from ..utils import paths as qb_paths
 from . import builder_materials
+from .import_progress import ImportProgress
 
 
 def run(operator: bpy.types.Operator, context: bpy.types.Context, filepath: str) -> int:
+    with ImportProgress(context.window_manager) as progress:
+        return _run(operator, filepath, progress=progress)
+
+
+def _run(operator: bpy.types.Operator, filepath: str, *,
+         progress: ImportProgress) -> int:
     path = Path(filepath)
     suffix = path.suffix.lower()
     create_materials = getattr(operator, "create_materials", True)
+    progress.phase(100)
 
     if suffix == ".wad":
         archive = wad_mod.read_wad_path(path)
+        progress.phase(200)
         # WAD2 uses the bundled Q1 palette; WAD3 textures may carry their own.
         default_pal = palette_mod.load_bundled("q1")
         count = 0
@@ -49,10 +58,12 @@ def run(operator: bpy.types.Operator, context: bpy.types.Context, filepath: str)
                     asset_key=f"{source_key}|image",
                 )
             count += 1
+            progress.update(count, len(archive.textures), start=200, end=950)
         return count
 
     if suffix == ".wal":
         w = wal_mod.read_wal_path(path)
+        progress.phase(500)
         pal = palette_mod.load_bundled("q2")
         source_key = qb_paths.file_asset_key(path, namespace="wal", member=w.name)
         if create_materials:
@@ -66,6 +77,7 @@ def run(operator: bpy.types.Operator, context: bpy.types.Context, filepath: str)
                 rgba,
                 asset_key=f"{source_key}|image",
             )
+        progress.phase(950)
         return 1
 
     raise ValueError(f"unsupported texture archive extension: {suffix!r}")

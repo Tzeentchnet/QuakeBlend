@@ -19,7 +19,16 @@ from ..utils import log as qb_log, paths as qb_paths
 from . import builder_entities, builder_geometry, builder_materials, builder_q3_materials
 from .prefs import get_prefs
 from .import_options import ImportState
+from .import_progress import ImportProgress
 from ..utils.import_options import is_trigger
+
+
+def _set_bsp_source_metadata(root: bpy.types.Collection, filepath: Path,
+                             game: str) -> None:
+    source_path = qb_paths.resolved_source_path(filepath)
+    root["qb_source_bsp"] = str(source_path)
+    root["qb_source_identity"] = qb_paths.canonical_source_identity(source_path)
+    root["qb_source_game"] = game
 
 
 def _resolve_texture_root(operator: bpy.types.Operator,
@@ -89,7 +98,9 @@ def _build_submodel_objects(entities: list[dict[str, str]],
                             stem: str,
                             *, face_count: int, scale: float,
                             import_brush_entities: bool = True, q3_bsp=None,
-                            q3_materials=None, state=None) -> None:
+                            q3_materials=None, state=None,
+                            progress: ImportProgress | None = None,
+                            progress_range: tuple[int, int] = (0, 0)) -> None:
     """Build one mesh object per BSP submodel; model 0 is the world.
 
     ``face_records`` are ``(face_index, polygon, material_slot, uvs)`` tuples.
@@ -112,7 +123,8 @@ def _build_submodel_objects(entities: list[dict[str, str]],
 
     if state:
         state.counts["skipped"] += len(skipped_models)
-    for model_index in sorted(grouped):
+    model_indices = sorted(grouped)
+    for progress_index, model_index in enumerate(model_indices, start=1):
         selected = grouped[model_index]
         model_verts, model_polys = _compact_polygons(
             vertices, [record[1] for record in selected]
@@ -148,13 +160,22 @@ def _build_submodel_objects(entities: list[dict[str, str]],
             state.mark(obj, {"trigger"} if is_trigger(owner or {}) else set())
         if q3_materials is not None:
             q3_materials.apply(obj)
+        if progress is not None:
+            progress.update(
+                progress_index,
+                len(model_indices),
+                start=progress_range[0],
+                end=progress_range[1],
+            )
 
 
 def _build_bsp_entities(operator: bpy.types.Operator,
                         entities: list[dict[str, str]],
                         root: bpy.types.Collection,
                         stem: str,
-                        *, scale: float, game: str = "q1", state=None) -> None:
+                        *, scale: float, game: str = "q1", state=None,
+                        progress: ImportProgress | None = None,
+                        progress_range: tuple[int, int] = (0, 0)) -> None:
     if not getattr(operator, "import_entities", True) or (state and state.options.worldspawn_only):
         return
     light_multiplier = float(getattr(operator, "light_energy", 1.0))
@@ -163,7 +184,14 @@ def _build_bsp_entities(operator: bpy.types.Operator,
     else:
         ent_coll = bpy.data.collections.new(f"{stem}_Entities")
         root.children.link(ent_coll)
-    for entity in entities:
+    for progress_index, entity in enumerate(entities, start=1):
+        if progress is not None:
+            progress.update(
+                progress_index,
+                len(entities),
+                start=progress_range[0],
+                end=progress_range[1],
+            )
         if game == "goldsrc" and entity.get("model", "").startswith("*"):
             continue
         classname = entity.get("classname", "entity")
@@ -216,10 +244,14 @@ def _detect_version(filepath: Path) -> tuple[str, int]:
 
 
 def _build_q1_materials(bsp: bsp_q1.Bsp,
-                        source_path: Path) -> dict[int, bpy.types.Material]:
+                        source_path: Path, *,
+                        progress: ImportProgress | None = None,
+                        ) -> dict[int, bpy.types.Material]:
     pal = palette_mod.load_bundled("q1")
     out: dict[int, bpy.types.Material] = {}
     for idx, mt in enumerate(bsp.miptextures):
+        if progress is not None:
+            progress.update(idx + 1, len(bsp.miptextures), start=150, end=300)
         if mt is None:
             continue
         # Adapt to the wad miptex shape used by builder_materials.
@@ -258,13 +290,18 @@ def _project_face_uvs(bsp: bsp_q1.Bsp, face: bsp_q1.Face,
 
 
 def _import_q1(operator: bpy.types.Operator, context: bpy.types.Context,
-               filepath: Path) -> None:
+               filepath: Path, *, progress: ImportProgress) -> None:
     state = ImportState(operator, context, bsp=True)
     scale = float(getattr(operator, "scale", 1.0 / 32.0))
     bsp = bsp_q1.read_path(filepath)
     bsp.validate()
+    progress.phase(150)
     create_materials = bool(getattr(operator, "create_materials", True))
-    materials_by_miptex = _build_q1_materials(bsp, filepath) if create_materials else {}
+    materials_by_miptex = (
+        _build_q1_materials(bsp, filepath, progress=progress)
+        if create_materials else {}
+    )
+    progress.phase(300)
 
     # Build a flat material list + per-face material index.
     material_list: list[bpy.types.Material] = []
@@ -277,6 +314,7 @@ def _import_q1(operator: bpy.types.Operator, context: bpy.types.Context,
     missing_texture_slot: int | None = None
     missing_texture_faces = 0
     for face_index, face in enumerate(bsp.faces):
+        progress.update(face_index + 1, len(bsp.faces), start=300, end=600)
         poly = bsp.face_polygon(face)
         if len(poly) < 3:
             continue
@@ -318,6 +356,7 @@ def _import_q1(operator: bpy.types.Operator, context: bpy.types.Context,
     scene = context.scene
     root = bpy.data.collections.new(filepath.stem)
     scene.collection.children.link(root)
+    _set_bsp_source_metadata(root, filepath, "q1")
     geom_coll = state.collection(root, f"{filepath.stem}_Geometry")
 
     _build_submodel_objects(
@@ -332,27 +371,40 @@ def _import_q1(operator: bpy.types.Operator, context: bpy.types.Context,
         scale=scale,
         import_brush_entities=bool(getattr(operator, "import_brush_entities", True)),
         state=state,
+        progress=progress,
+        progress_range=(600, 800),
     )
-
-    _build_bsp_entities(operator, bsp.entities, root, filepath.stem, scale=scale, state=state)
+    progress.phase(800)
+    _build_bsp_entities(
+        operator, bsp.entities, root, filepath.stem, scale=scale, state=state,
+        progress=progress, progress_range=(800, 950),
+    )
+    progress.phase(950)
     state.finish(root)
 
 
 def run(operator: bpy.types.Operator, context: bpy.types.Context, filepath: str) -> None:
+    with ImportProgress(context.window_manager) as progress:
+        _run(operator, context, filepath, progress=progress)
+
+
+def _run(operator: bpy.types.Operator, context: bpy.types.Context, filepath: str,
+         *, progress: ImportProgress) -> None:
     path = Path(filepath)
     flavour, version = _detect_version(path)
+    progress.phase(50)
     if flavour == "goldsrc":
         from . import import_runner_goldsrc
-        import_runner_goldsrc.run(operator, context, path)
+        import_runner_goldsrc.run(operator, context, path, progress=progress)
         return
     if flavour == "q1":
-        _import_q1(operator, context, path)
+        _import_q1(operator, context, path, progress=progress)
         return
     if flavour == "q2":
-        _import_q2(operator, context, path)
+        _import_q2(operator, context, path, progress=progress)
         return
     if flavour == "q3":
-        _import_q3(operator, context, path)
+        _import_q3(operator, context, path, progress=progress)
         return
     raise NotImplementedError(
         f"BSP version {version} ({flavour}) import is implemented in a later phase"
@@ -365,10 +417,13 @@ def run(operator: bpy.types.Operator, context: bpy.types.Context, filepath: str)
 def _build_q2_materials(operator: bpy.types.Operator,
                         bsp: bsp_q2.Bsp,
                         texture_index: qb_paths.TextureRootIndex | None,
+                        *, progress: ImportProgress | None = None,
                         ) -> dict[str, bpy.types.Material]:
     pal = palette_mod.load_bundled("q2")
     out: dict[str, bpy.types.Material] = {}
-    for ti in bsp.texinfos:
+    for index, ti in enumerate(bsp.texinfos):
+        if progress is not None:
+            progress.update(index + 1, len(bsp.texinfos), start=150, end=300)
         if ti.texture_name in out:
             continue
         info = (
@@ -434,13 +489,14 @@ def _project_q2_face_uvs(bsp: bsp_q2.Bsp, face: bsp_q2.Face,
 
 
 def _import_q2(operator: bpy.types.Operator, context: bpy.types.Context,
-               filepath: Path) -> None:
+               filepath: Path, *, progress: ImportProgress) -> None:
     state = ImportState(operator, context, bsp=True)
     scale = float(getattr(operator, "scale", 1.0 / 32.0))
     texture_root = _resolve_texture_root(operator, context)
 
     bsp = bsp_q2.read_path(filepath)
     bsp.validate()
+    progress.phase(150)
     texture_index = (
         qb_paths.TextureRootIndex(texture_root)
         if texture_root is not None
@@ -448,7 +504,8 @@ def _import_q2(operator: bpy.types.Operator, context: bpy.types.Context,
     )
     create_materials = bool(getattr(operator, "create_materials", True))
     materials_by_name = (
-        _build_q2_materials(operator, bsp, texture_index) if create_materials else {}
+        _build_q2_materials(operator, bsp, texture_index, progress=progress)
+        if create_materials else {}
     )
 
     material_list: list[bpy.types.Material] = []
@@ -479,8 +536,10 @@ def _import_q2(operator: bpy.types.Operator, context: bpy.types.Context,
                 qb_log.report(operator, {"WARNING"},
                               f"Failed to read WAL dimensions for '{name}': {exc}")
 
+    progress.phase(300)
     face_records: list[tuple] = []
     for face_index, face in enumerate(bsp.faces):
+        progress.update(face_index + 1, len(bsp.faces), start=300, end=600)
         poly = bsp.face_polygon(face)
         if len(poly) < 3:
             continue
@@ -498,6 +557,7 @@ def _import_q2(operator: bpy.types.Operator, context: bpy.types.Context,
     scene = context.scene
     root = bpy.data.collections.new(filepath.stem)
     scene.collection.children.link(root)
+    _set_bsp_source_metadata(root, filepath, "q2")
     geom_coll = state.collection(root, f"{filepath.stem}_Geometry")
 
     _build_submodel_objects(
@@ -512,9 +572,15 @@ def _import_q2(operator: bpy.types.Operator, context: bpy.types.Context,
         scale=scale,
         import_brush_entities=bool(getattr(operator, "import_brush_entities", True)),
         state=state,
+        progress=progress,
+        progress_range=(600, 800),
     )
-
-    _build_bsp_entities(operator, bsp.entities, root, filepath.stem, scale=scale, state=state)
+    progress.phase(800)
+    _build_bsp_entities(
+        operator, bsp.entities, root, filepath.stem, scale=scale, state=state,
+        progress=progress, progress_range=(800, 950),
+    )
+    progress.phase(950)
     state.finish(root)
 
 
@@ -524,9 +590,12 @@ def _import_q2(operator: bpy.types.Operator, context: bpy.types.Context,
 def _build_q3_materials(operator: bpy.types.Operator,
                         bsp: bsp_q3.Bsp,
                         texture_index: qb_paths.TextureRootIndex | None,
+                        *, progress: ImportProgress | None = None,
                         ) -> list[bpy.types.Material]:
     out: list[bpy.types.Material] = []
-    for tex in bsp.textures:
+    for index, tex in enumerate(bsp.textures):
+        if progress is not None:
+            progress.update(index + 1, len(bsp.textures), start=150, end=300)
         info = (
             texture_index.resolve(tex.name, kind="image")
             if texture_index is not None
@@ -568,7 +637,7 @@ def _build_q3_materials(operator: bpy.types.Operator,
 
 
 def _import_q3(operator: bpy.types.Operator, context: bpy.types.Context,
-               filepath: Path) -> None:
+               filepath: Path, *, progress: ImportProgress) -> None:
     state = ImportState(operator, context, bsp=True)
     scale = float(getattr(operator, "scale", 1.0 / 32.0))
     patch_level = int(getattr(operator, "patch_level", 5))
@@ -576,6 +645,7 @@ def _import_q3(operator: bpy.types.Operator, context: bpy.types.Context,
 
     bsp = bsp_q3.read_path(filepath)
     bsp.validate()
+    progress.phase(150)
     model_of_face = _model_of_face(bsp.models, len(bsp.faces))
     owners = _entities_by_model(bsp.entities)
     included = [state.options.model_allowed(index, owners.get(index, {})) for index in model_of_face]
@@ -594,6 +664,7 @@ def _import_q3(operator: bpy.types.Operator, context: bpy.types.Context,
         material_list = []
         slots = {}
         for index, face in enumerate(bsp.faces):
+            progress.update(index + 1, len(bsp.faces), start=150, end=300)
             if not included[index]:
                 continue
             identity = face.texture, face.lm_index
@@ -602,11 +673,16 @@ def _import_q3(operator: bpy.types.Operator, context: bpy.types.Context,
                 material_list.append(q3_materials.get(bsp.textures[face.texture].name, face.lm_index))
             face_slots[index] = slots[identity]
     else:
-        material_list = _build_q3_materials(operator, bsp, texture_index) if create_materials else []
+        material_list = (
+            _build_q3_materials(operator, bsp, texture_index, progress=progress)
+            if create_materials else []
+        )
+    progress.phase(300)
 
     scene = context.scene
     root = bpy.data.collections.new(filepath.stem)
     scene.collection.children.link(root)
+    _set_bsp_source_metadata(root, filepath, "q3")
     geom_coll = state.collection(root, f"{filepath.stem}_Geometry")
     root["qb_q3_material_mode"] = "SHADERS" if q3_materials else "DIRECT"
 
@@ -614,6 +690,7 @@ def _import_q3(operator: bpy.types.Operator, context: bpy.types.Context,
     poly_records: list[tuple] = []
     skipped_models = set()
     for face_index, face in enumerate(bsp.faces):
+        progress.update(face_index + 1, len(bsp.faces), start=300, end=550)
         if not included[face_index]:
             if (not state.options.worldspawn_only and state.options.import_brush_entities
                     and face.type in {bsp_q3.FACE_TYPE_POLY, bsp_q3.FACE_TYPE_MESH}):
@@ -644,6 +721,7 @@ def _import_q3(operator: bpy.types.Operator, context: bpy.types.Context,
                     [_flip_v(bsp.vertices[i].tex_uv) for i in indices],
                 ))
 
+    progress.phase(550)
     state.counts["skipped"] += len(skipped_models)
     _build_submodel_objects(
         bsp.entities,
@@ -659,13 +737,17 @@ def _import_q3(operator: bpy.types.Operator, context: bpy.types.Context,
         q3_bsp=bsp if q3_materials else None,
         q3_materials=q3_materials,
         state=state,
+        progress=progress,
+        progress_range=(550, 700),
     )
+    progress.phase(700)
 
     # Pass 2: patches → tessellated quads, one mesh per patch (preserves
     # the original control grid as a custom property for future round-trip).
     model_of_face = _model_of_face(bsp.models, len(bsp.faces))
     patches_coll: bpy.types.Collection | None = None
     for fi, face in enumerate(bsp.faces):
+        progress.update(fi + 1, len(bsp.faces), start=700, end=850)
         if face.type != bsp_q3.FACE_TYPE_PATCH:
             continue
         if not included[fi]:
@@ -719,8 +801,13 @@ def _import_q3(operator: bpy.types.Operator, context: bpy.types.Context,
         if q3_materials:
             q3_materials.apply(patch_obj)
 
+    progress.phase(850)
     if q3_materials:
         for name, diagnostic in q3_materials.diagnostics.items():
             qb_log.report(operator, {"WARNING"}, f"Q3 shader {name}: {diagnostic}")
-    _build_bsp_entities(operator, bsp.entities, root, filepath.stem, scale=scale, state=state)
+    _build_bsp_entities(
+        operator, bsp.entities, root, filepath.stem, scale=scale, state=state,
+        progress=progress, progress_range=(850, 950),
+    )
+    progress.phase(950)
     state.finish(root)

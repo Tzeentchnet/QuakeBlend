@@ -26,6 +26,10 @@ are not written to the exported MAP. The exporter converts the original MAP
 text, not the generated Blender meshes. An experimental transform-only option
 is described below; it does not export vertex or topology edits.
 
+Source replay and **Apply entity edits from scene** work with both **Per Brush**
+and **Merged World** imports because they use the recorded source and entity
+anchors rather than reconstructing brushes from the display mesh.
+
 Keep the original MAP available at its recorded path. Export fails if the
 file can no longer be read or parsed.
 
@@ -114,8 +118,10 @@ detail brush in a real 3,441-brush LibreQuake map has also passed BSP29 geometry
 and UV checks. Broader transforms, submodels, textured real-map builds, and
 real-map viewport acceptance remain unverified.
 
-1. Import the original Q1 or Q2 MAP using this version of QuakeBlend. Older
-  imports need reimporting to capture source hashes and mesh baselines.
+1. Import the original Q1 or Q2 MAP using **Per Brush** geometry in this
+  version of QuakeBlend. Older imports need reimporting to capture source hashes
+  and mesh baselines. Merged World imports are rejected immediately with a
+  request to reimport using Per Brush.
 2. In Object Mode, translate, rotate or positively scale brush objects. Plain
   object parenting is supported when the resulting world matrix has no shear
   or reflection. Moving an entity anchor does not move its brush geometry.
@@ -137,12 +143,12 @@ texture identifiers are retained. The importer records `qb_source_face`,
 projection and face flags are recovered from the fingerprint-matched source.
 Do not edit these provenance records manually.
 
-Before writing, the exporter serializes and re-parses the proposed output,
-checks brush reconstruction within `0.0001` game units, and checks UV agreement
-within `0.001` texture pixels. Large-coordinate edits can fail because of the
-writer's numeric precision. Output that changes names/properties under the
-current UTF-8 writer and Latin-1 reader is also rejected, including non-ASCII
-text that would not round-trip. These checks do not replace compiler validation.
+Before writing, the exporter encodes the proposed output as strict Latin-1 and
+re-parses that exact round-trip, checks brush reconstruction within `0.0001`
+game units, and checks UV agreement within `0.001` texture pixels.
+Large-coordinate edits can fail because of the writer's numeric precision.
+Latin-1 non-ASCII names and properties are preserved; characters outside
+Latin-1 cancel the export. These checks do not replace compiler validation.
 
 All brushes must pass before the existing atomic writer replaces the destination.
 A rejected export leaves existing destination contents and the Blender scene

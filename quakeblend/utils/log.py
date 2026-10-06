@@ -39,3 +39,9 @@ def report(operator: ReportOperator, level: Iterable[str], message: str) -> None
         logging.ERROR if "ERROR" in level else logging.INFO
     )
     get_logger().log(log_level, message)
+
+
+def report_exception(operator: ReportOperator, message: str) -> None:
+    """Report a concise Blender error and log the active exception traceback."""
+    operator.report({"ERROR"}, message)
+    get_logger().exception(message)

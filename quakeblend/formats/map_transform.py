@@ -84,7 +84,8 @@ def _match_points(expected, actual):
 
 def validate_serialized(expected: map_q1.MapFile, text: str) -> None:
     """Validate the exact proposed text before atomic destination replacement."""
-    actual = map_q1.parse(text.encode("utf-8").decode("latin-1"))
+    encoded = map_writer._encode_map_text(text)
+    actual = map_q1.parse(encoded.decode("latin-1", errors="strict"))
     if len(expected.entities) != len(actual.entities):
         raise ValueError("Serialization changed entity count")
     for source_entity, actual_entity in zip(expected.entities, actual.entities):

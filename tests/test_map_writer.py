@@ -381,16 +381,43 @@ def test_serialize_path_does_not_partially_overwrite_destination(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     destination = tmp_path / "output.map"
-    destination.write_text("existing map", encoding="utf-8")
-    original_write_text = Path.write_text
+    destination.write_bytes(b"existing map")
+    original_write_bytes = Path.write_bytes
 
-    def fail_after_partial_write(path: Path, text: str, **kwargs) -> int:
-        original_write_text(path, text[:8], **kwargs)
+    def fail_after_partial_write(path: Path, data: bytes) -> int:
+        original_write_bytes(path, data[:8])
         raise OSError("simulated write failure")
 
-    monkeypatch.setattr(Path, "write_text", fail_after_partial_write)
+    monkeypatch.setattr(Path, "write_bytes", fail_after_partial_write)
 
     with pytest.raises(OSError, match="simulated write failure"):
         map_writer.serialize_path(map_q1.parse(CUBE_Q1), destination, dialect="q1")
 
-    assert destination.read_text(encoding="utf-8") == "existing map"
+    assert destination.read_bytes() == b"existing map"
+    assert set(tmp_path.iterdir()) == {destination}
+
+
+def test_serialize_path_round_trips_latin_1_text(tmp_path: Path) -> None:
+    destination = tmp_path / "output.map"
+    level = map_q1.parse(CUBE_Q1)
+    level.entities[0].properties["message"] = "caf\u00e9"
+
+    map_writer.serialize_path(level, destination, dialect="q1")
+
+    assert b'"message" "caf\xe9"' in destination.read_bytes()
+    assert map_q1.parse_path(destination).entities[0].properties["message"] == "caf\u00e9"
+
+
+def test_serialize_path_rejects_non_latin_1_without_overwriting(
+    tmp_path: Path,
+) -> None:
+    destination = tmp_path / "output.map"
+    destination.write_bytes(b"existing map")
+    level = map_q1.parse(CUBE_Q1)
+    level.entities[0].properties["message"] = "snowman \u2603"
+
+    with pytest.raises(ValueError, match="outside Latin-1"):
+        map_writer.serialize_path(level, destination, dialect="q1")
+
+    assert destination.read_bytes() == b"existing map"
+    assert set(tmp_path.iterdir()) == {destination}

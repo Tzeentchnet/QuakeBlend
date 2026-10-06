@@ -7,6 +7,7 @@ import os
 import bpy
 from bpy_extras.io_utils import ImportHelper
 
+from ..utils import log as qb_log
 from ..utils.constants import DEFAULT_IMPORT_SCALE, DEFAULT_PATCH_LEVEL
 from .import_options import configure_import_operator
 
@@ -87,14 +88,30 @@ class IMPORT_OT_quake_map(bpy.types.Operator, ImportHelper):
     )
 
     def execute(self, context: bpy.types.Context) -> set[str]:
-        from . import import_runner_map
+        from . import import_replacement, import_runner_map
         from .transaction import ImportTransaction
 
+        filepath = os.fspath(self.filepath)
         try:
+            plan = import_replacement.prepare_replacement(
+                filepath,
+                kind="map",
+                enabled=bool(self.replace_existing),
+                collections=bpy.data.collections,
+            )
             with ImportTransaction():
-                import_runner_map.run(self, context, os.fspath(self.filepath))
+                import_runner_map.run(self, context, filepath)
+                if plan is not None:
+                    new_root = import_replacement.find_new_root(
+                        plan,
+                        bpy.data.collections,
+                    )
+                    import_replacement.replace_import_root(plan, new_root)
+        except import_replacement.ImportReplacementError as exc:
+            qb_log.report(self, {"ERROR"}, str(exc))
+            return {"CANCELLED"}
         except Exception as exc:  # pragma: no cover - surfaced through UI
-            self.report({"ERROR"}, f"MAP import failed: {exc}")
+            qb_log.report_exception(self, f"MAP import failed: {exc}")
             return {"CANCELLED"}
         return {"FINISHED"}
 

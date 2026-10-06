@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 import bpy
 from bpy_extras.io_utils import ImportHelper
 
+from ..utils import log as qb_log
 from ..utils.constants import DEFAULT_IMPORT_SCALE, DEFAULT_PATCH_LEVEL
 from .map_assembly import target_items
 from .import_options import configure_import_operator
@@ -84,14 +86,37 @@ class IMPORT_OT_quake_bsp(bpy.types.Operator, ImportHelper):
     )
 
     def execute(self, context: bpy.types.Context) -> set[str]:
-        from . import import_runner_bsp
+        from . import import_replacement, import_runner_bsp
         from .transaction import ImportTransaction
 
+        filepath = os.fspath(self.filepath)
         try:
+            replace_existing = bool(self.replace_existing)
+            source_game = (
+                import_runner_bsp._detect_version(Path(filepath))[0]
+                if replace_existing
+                else None
+            )
+            plan = import_replacement.prepare_replacement(
+                filepath,
+                kind="bsp",
+                enabled=replace_existing,
+                collections=bpy.data.collections,
+                source_game=source_game,
+            )
             with ImportTransaction():
-                import_runner_bsp.run(self, context, os.fspath(self.filepath))
+                import_runner_bsp.run(self, context, filepath)
+                if plan is not None:
+                    new_root = import_replacement.find_new_root(
+                        plan,
+                        bpy.data.collections,
+                    )
+                    import_replacement.replace_import_root(plan, new_root)
+        except import_replacement.ImportReplacementError as exc:
+            qb_log.report(self, {"ERROR"}, str(exc))
+            return {"CANCELLED"}
         except Exception as exc:  # pragma: no cover
-            self.report({"ERROR"}, f"BSP import failed: {exc}")
+            qb_log.report_exception(self, f"BSP import failed: {exc}")
             return {"CANCELLED"}
         return {"FINISHED"}
 

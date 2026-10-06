@@ -2,11 +2,45 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
 
 from quakeblend.utils import paths as qb_paths
+
+
+def test_resolved_source_path_normalizes_equivalent_paths(tmp_path: Path) -> None:
+    source = tmp_path / "maps" / "level.bsp"
+    source.parent.mkdir()
+    source.write_bytes(b"bsp")
+    alias = source.parent / "unused" / ".." / source.name
+
+    assert qb_paths.resolved_source_path(alias) == source.resolve()
+    assert (
+        qb_paths.canonical_source_identity(alias)
+        == qb_paths.canonical_source_identity(source)
+    )
+
+
+def test_canonical_source_identity_uses_portable_separators(tmp_path: Path) -> None:
+    source = tmp_path / "maps" / "level.bsp"
+    expected = Path(os.path.normcase(str(source.resolve()))).as_posix()
+
+    assert qb_paths.canonical_source_identity(source) == expected
+    assert qb_paths.canonical_source_identity(str(source)) == expected
+
+
+def test_canonical_source_identity_uses_platform_case_rules(tmp_path: Path) -> None:
+    source = tmp_path / "MixedCase.bsp"
+    case_variant = Path(str(source).swapcase())
+    same_case_identity = qb_paths.canonical_source_identity(source)
+    variant_identity = qb_paths.canonical_source_identity(case_variant)
+
+    if os.path.normcase("A") == os.path.normcase("a"):
+        assert variant_identity == same_case_identity
+    else:
+        assert variant_identity != same_case_identity
 
 
 def test_safe_join_simple_relative_name(tmp_path: Path) -> None:

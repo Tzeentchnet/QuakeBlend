@@ -8,11 +8,20 @@ from pathlib import Path
 
 import bpy
 
-from ..utils.import_options import ImportOptions, LIGHTING_ITEMS, TOOL_ITEMS
+from ..utils.import_options import ImportOptions, LIGHTING_ITEMS, MAP_GEOMETRY_ITEMS, TOOL_ITEMS
 
 
 def import_option_properties(*, bsp=False):
     props = {
+        "replace_existing": bpy.props.BoolProperty(
+            name="Replace Existing Import",
+            default=False,
+            description=(
+                "After a successful import, replace exactly one existing "
+                "Q1/Q2/Q3 root with the same canonical source path; "
+                "GoldSrc is not supported"
+            ),
+        ),
         "worldspawn_only": bpy.props.BoolProperty(name="Worldspawn Only", default=False,
             description="Import world geometry only, without non-world brushes or entity objects"),
         "group_entities": bpy.props.BoolProperty(name="Organize in Collections", default=True,
@@ -27,6 +36,8 @@ def import_option_properties(*, bsp=False):
     }
     if not bsp:
         props.update({
+            "geometry_mode": bpy.props.EnumProperty(name="Geometry", items=MAP_GEOMETRY_ITEMS,
+                default="PER_BRUSH"),
             "create_materials": bpy.props.BoolProperty(name="Create Materials", default=True,
                 description="Create materials and images; disabling preserves geometry, UVs and source data"),
             "import_brush_entities": bpy.props.BoolProperty(name="Import Brush Entities", default=True,
@@ -89,9 +100,17 @@ def draw_import_options(operator, context):
         if not bsp:
             body.prop(operator, "source_game")
         body.prop(operator, "scale")
+        body.prop(operator, "replace_existing")
+        if bsp and game == "GOLDSRC":
+            body.label(
+                text="Disable replacement to import GoldSrc",
+                icon="INFO",
+            )
     body = panel("qb_content", "Content")
     if body:
         body.prop(operator, "worldspawn_only")
+        if not bsp:
+            body.prop(operator, "geometry_mode")
         body.prop(operator, "group_entities", text="Collections")
         content = body.column()
         content.enabled = not operator.worldspawn_only

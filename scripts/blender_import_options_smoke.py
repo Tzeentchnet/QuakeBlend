@@ -52,6 +52,7 @@ def check_layout(extension_root):
         rna = getattr(bpy.ops.quakeblend, f"import_{kind}").get_rna_type()
         defaults = {prop.identifier: prop.default for prop in rna.properties
                     if prop.identifier != "stitch_target" and hasattr(prop, "default")}
+        assert defaults["replace_existing"] is False
         if kind == "bsp":
             defaults["stitch_target"] = "AUTO"
         for game in games:
@@ -66,6 +67,8 @@ def check_layout(extension_root):
                 controls.draw_import_options(operator, None)
                 assert rows["import_entities"] == (not disabled)
                 assert rows["texture_root"]
+                assert rows["replace_existing"]
+                assert ("geometry_mode" in rows) == (kind == "map")
                 assert ("q3_lighting" in rows) == (game in {"", "AUTO", "Q3"})
                 if "q3_lighting" in rows:
                     assert rows["q3_lighting"] == (not disabled)

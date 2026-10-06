@@ -13,6 +13,7 @@ from ..utils import log as qb_log, paths as qb_paths
 from . import builder_materials, import_runner_bsp, map_assembly
 from .prefs import get_prefs
 from .import_options import ImportState
+from .import_progress import ImportProgress
 
 
 def _wad_textures(operator: bpy.types.Operator, context: bpy.types.Context,
@@ -44,6 +45,7 @@ def _wad_textures(operator: bpy.types.Operator, context: bpy.types.Context,
 
 def _materials(operator: bpy.types.Operator, context: bpy.types.Context,
                 bsp: bsp_goldsrc.Bsp, source: Path,
+                *, progress: ImportProgress,
                 ) -> dict[int, bpy.types.Material]:
     external_needed = any(texture is not None and index not in bsp.embedded_textures
                           for index, texture in enumerate(bsp.miptextures))
@@ -51,8 +53,10 @@ def _materials(operator: bpy.types.Operator, context: bpy.types.Context,
     texture_root = import_runner_bsp._resolve_texture_root(operator, context)
     image_index = (qb_paths.TextureRootIndex(texture_root)
                    if texture_root is not None and external_needed else None)
+    progress.phase(180)
     materials: dict[int, bpy.types.Material] = {}
     for index, reference in enumerate(bsp.miptextures):
+        progress.update(index + 1, len(bsp.miptextures), start=180, end=300)
         if reference is None:
             continue
         texture = bsp.embedded_textures.get(index)
@@ -95,17 +99,24 @@ def _materials(operator: bpy.types.Operator, context: bpy.types.Context,
     return materials
 
 
-def run(operator: bpy.types.Operator, context: bpy.types.Context, filepath: Path) -> None:
+def run(operator: bpy.types.Operator, context: bpy.types.Context, filepath: Path,
+        *, progress: ImportProgress) -> None:
     state = ImportState(operator, context, bsp=True)
     bsp = bsp_goldsrc.read_path(filepath)
+    progress.phase(150)
     scale = float(getattr(operator, "scale", 1.0 / 32.0))
     create_materials = bool(getattr(operator, "create_materials", True))
-    materials = _materials(operator, context, bsp, filepath) if create_materials else {}
+    materials = (
+        _materials(operator, context, bsp, filepath, progress=progress)
+        if create_materials else {}
+    )
+    progress.phase(300)
     material_list: list[bpy.types.Material] = []
     slots: dict[int, int] = {}
     records: list[tuple] = []
     model_of_face = import_runner_bsp._model_of_face(bsp.models, len(bsp.faces))
     for face_index, face in enumerate(bsp.faces):
+        progress.update(face_index + 1, len(bsp.faces), start=300, end=600)
         if model_of_face[face_index] != 0 and not getattr(operator, "import_brush_entities", True):
             continue
         polygon = bsp.face_polygon(face)
@@ -141,9 +152,13 @@ def run(operator: bpy.types.Operator, context: bpy.types.Context, filepath: Path
         bsp.entities, bsp.models, records, bsp.vertices, material_list, geometry, filepath.stem,
         face_count=len(bsp.faces), scale=scale,
         state=state,
+        progress=progress,
+        progress_range=(600, 800),
     )
+    progress.phase(800)
     owners = import_runner_bsp._entities_by_model(bsp.entities)
-    for obj in geometry.objects:
+    for object_index, obj in enumerate(geometry.objects, start=1):
+        progress.update(object_index, len(geometry.objects), start=800, end=850)
         owner = owners.get(obj["qb_bsp_model_index"])
         if owner is None:
             continue
@@ -152,9 +167,16 @@ def run(operator: bpy.types.Operator, context: bpy.types.Context, filepath: Path
         if owner.get("rendermode", "0") != "0" or owner.get("renderfx", "0") != "0":
             qb_log.report(operator, {"WARNING"},
                           f"GoldSrc {owner.get('classname', 'brush')}: render mode/effects retained as metadata only")
-    import_runner_bsp._build_bsp_entities(operator, bsp.entities, root, filepath.stem,
-                                         scale=scale, game="goldsrc", state=state)
+    progress.phase(850)
+    import_runner_bsp._build_bsp_entities(
+        operator, bsp.entities, root, filepath.stem,
+        scale=scale, game="goldsrc", state=state,
+        progress=progress, progress_range=(850, 930),
+    )
+    progress.phase(930)
     map_assembly.create_root(root)
+    progress.phase(950)
     if getattr(operator, "stitch_goldsrc", False):
         map_assembly.stitch_import(operator, context, root)
+    progress.phase(975)
     state.finish(root)

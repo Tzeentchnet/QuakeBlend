@@ -19,6 +19,18 @@ _TEXTURE_KINDS = {
 }
 
 
+def resolved_source_path(path: str | Path) -> Path:
+    """Return the absolute, normalized path used for persisted source metadata."""
+    return Path(path).expanduser().resolve()
+
+
+def canonical_source_identity(path: str | Path) -> str:
+    """Return a stable identity for matching equivalent source paths."""
+    resolved = resolved_source_path(path)
+    normalized = os.path.normcase(os.fspath(resolved))
+    return Path(normalized).as_posix()
+
+
 class TextureRootIndex:
     """Case-insensitive lookup index for supported files beneath one root."""
 

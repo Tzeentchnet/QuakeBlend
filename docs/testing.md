@@ -46,10 +46,12 @@ large-coordinate UV precision loss. The supported production contract and
 rejection rules are documented under
 [Apply brush transforms](exporting.md#apply-brush-transforms-experimental).
 
-The production transform validator has separate coverage in
-[tests/test_map_transform.py](../tests/test_map_transform.py), including oblique
-brushes, unsupported transforms, serialized UV precision loss and encoding
-round-trip rejection.
+The MAP writer and production transform validator have separate coverage in
+[tests/test_map_writer.py](../tests/test_map_writer.py) and
+[tests/test_map_transform.py](../tests/test_map_transform.py), including atomic
+destination preservation and cleanup, oblique brushes, unsupported transforms,
+serialized UV precision loss, strict Latin-1 round-trips, and rejection of
+characters outside Latin-1.
 
 The architecture test can be run independently:
 
@@ -102,6 +104,11 @@ The script exercises:
 - extension registration and operator availability
 - image and material creation
 - transaction rollback
+- bounded import progress and cleanup after success and rollback failure
+- opt-in MAP and Q1/Q2/Q3 BSP replacement, including default duplicates,
+  exact-one preflight errors, rollback with the old root intact, orphan ownership
+  cleanup, shared materials/images, root-name restoration, merged-world transform
+  rejection, and explicit GoldSrc rejection
 - synthetic Q1, Q2, and Q3 MAP workflows
 - texture-name casing and Q2 face metadata
 - BSP and WAD imports, including BSP submodels
@@ -128,8 +135,110 @@ The script exercises:
 A successful run ends with:
 
 ```text
-QUAKEBLEND_SMOKE_OK registration materials transaction map rollback textures bsp submodels wad export unregister
+QUAKEBLEND_SMOKE_OK registration materials transaction map progress rollback replacement textures bsp submodels wad export unregister
 ```
+
+## Large MAP import benchmark
+
+Run `scripts/blender_large_map_benchmark.py` before optimizing the MAP builders.
+It generates a deterministic, material-free Quake 1 worldspawn in a unique
+temporary directory, imports it through the installed extension, verifies the
+operator result and the mode-specific mesh count, then removes the generated
+MAP when Blender exits the temporary-directory context. The default is 3,441
+disjoint box brushes in `PER_BRUSH` mode; pass `--brushes` for a quicker sanity
+run or `--geometry-mode MERGED_WORLD` for the merged comparison. Merged runs
+also validate the root's geometry mode, brush list, and face-provenance
+attributes.
+
+Use the same isolated, existing profile requirements as the acceptance launcher.
+The profile must already contain the extension installed from the archive being
+measured. From the repository root, the exact 3,441-brush command is:
+
+```powershell
+$blender = "C:\Program Files\Blender Foundation\Blender 5.0\blender.exe"
+$profile = Join-Path $env:TEMP "quakeblend-benchmark-profile"
+$config = Join-Path $profile "config"
+New-Item -ItemType Directory -Force $config | Out-Null
+$env:BLENDER_USER_RESOURCES = $profile
+$env:BLENDER_USER_CONFIG = $config
+foreach ($geometryMode in @("PER_BRUSH", "MERGED_WORLD")) {
+  & $blender --background --factory-startup --python-exit-code 1 `
+    --python .\scripts\blender_acceptance.py -- `
+    --version 5.0.0 .\scripts\blender_large_map_benchmark.py `
+    --brushes 3441 --geometry-mode $geometryMode
+  if ($LASTEXITCODE -ne 0) {
+    throw "Large MAP benchmark failed for $geometryMode"
+  }
+}
+```
+
+Each successful run emits one `QUAKEBLEND_LARGE_MAP_BENCHMARK` line followed by
+a JSON object. `elapsed_import_seconds` times only the synchronous
+`bpy.ops.quakeblend.import_map` call; generation, extension enablement, and
+validation are outside the interval. `object_count`, `mesh_object_count`, and
+`mesh_datablock_count` describe the imported root. The peak-memory value is the
+operating system's process-lifetime resident-memory high-water mark after import
+(`PeakWorkingSetSize` on Windows or `ru_maxrss` on POSIX), not the import's
+incremental allocation. `peak_process_memory_before_import_bytes` helps show
+whether import raised that high-water mark.
+
+Treat results as local comparison baselines, not universal performance claims.
+Compare runs made with the same Blender build, installed extension build, host,
+brush count, and import options. The JSON includes that context plus a hash and
+byte count for the generated MAP; `import_options.geometry_mode` distinguishes
+the two modes. Factory startup and a fresh Blender process remain important
+because the memory high-water mark covers the entire process.
+
+### Observed pre-optimization baseline
+
+The following local observations were recorded on 2026-10-05. They are evidence
+that the benchmark completed on this machine, not performance targets for other
+systems:
+
+- Blender 5.0.0 release build `a37564c4df7a`, Python 3.11.13
+- locally built QuakeBlend 1.3.0 extension from this worktree, installed in an
+  isolated profile
+- `Windows-10-10.0.26200-SP0`, AMD64 Family 26 Model 68 Stepping 0
+  (`AuthenticAMD`), 16 logical CPUs
+- Q1 source override, scale `0.03125`, worldspawn only, and material creation
+  disabled
+
+| Brushes | Import seconds | Objects | Mesh objects | Mesh datablocks | Peak process bytes | Pre-import peak bytes |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 16 | 0.126476 | 16 | 16 | 16 | 156,868,608 | 150,753,280 |
+| 3,441 | 1.774319 | 3,441 | 3,441 | 3,441 | 436,994,048 | 155,545,600 |
+
+The 16-brush sanity MAP was 6,183 bytes with SHA-256
+`d080b6c58c4a759bcb7f92c41abdc29314f7184bf9c9f449b02713634f261499`.
+The 3,441-brush baseline MAP was 1,500,944 bytes with SHA-256
+`e928aeed9b6fb4e50a9a242e699a9b3fac7f476175f2b5dc8b9d882190669076`.
+Both operator results were `FINISHED`.
+
+### Observed merged-world comparison
+
+The following single-run comparison was recorded on 2026-10-05. Both modes used
+separate factory-startup processes, the same officially built and installed
+QuakeBlend 1.3.0 archive, and the same generated MAP:
+
+- Blender 5.2.2 LTS release build `d13f752e3b9c`, Python 3.13.13
+- `Windows-11-10.0.26200-SP0`, AMD64 Family 26 Model 68 Stepping 0
+  (`AuthenticAMD`), 16 logical CPUs
+- Q1 source override, scale `0.03125`, worldspawn only, material creation
+  disabled, and an explicit geometry mode
+- 3,441 brushes, 1,500,944 bytes, SHA-256
+  `e928aeed9b6fb4e50a9a242e699a9b3fac7f476175f2b5dc8b9d882190669076`
+
+| Geometry mode | Import seconds | Objects | Mesh objects | Mesh datablocks | Peak process bytes | Pre-import peak bytes |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `PER_BRUSH` | 1.733040 | 3,441 | 3,441 | 3,441 | 455,110,656 | 181,563,392 |
+| `MERGED_WORLD` | 1.115577 | 1 | 1 | 1 | 256,864,256 | 182,652,928 |
+
+On this host, merged worldspawn geometry reduced each object/mesh count by
+99.9709% (3,441 to 1). The single observed import was 35.63% faster, the
+process-lifetime peak was 43.56% lower, and the increase from each run's
+pre-import peak was 72.87% lower (273,547,264 versus 74,211,328 bytes). Both
+operator results were `FINISHED`; these timing and memory percentages are local
+observations, not performance guarantees.
 
 ## Import-option acceptance
 
@@ -185,12 +294,13 @@ run pytest, build the fallback extension archive, validate its contents, and
 upload it as an artifact.
 
 The second job installs Blender 5.0.0, downloads and installs that exact
-archive, and runs the headless smoke script. The job fails if Blender exits
-with an error or if the success marker is missing.
+archive, and runs the general and merged-world headless smoke scripts. The job
+fails if Blender exits with an error or if either success marker is missing.
 
 The workflow definition is in
-[`.github/workflows/ci.yml`](../.github/workflows/ci.yml), and the smoke test
-is in [`scripts/blender_smoke.py`](../scripts/blender_smoke.py).
+[`.github/workflows/ci.yml`](../.github/workflows/ci.yml). The smoke entry
+points are [`scripts/blender_smoke.py`](../scripts/blender_smoke.py) and
+[`scripts/blender_merged_world_smoke.py`](../scripts/blender_merged_world_smoke.py).
 
 ## Compiler-produced fixtures
 

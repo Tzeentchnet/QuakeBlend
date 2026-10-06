@@ -87,3 +87,30 @@ def test_report_handles_empty_messages_and_unusual_levels(caplog: pytest.LogCapt
     assert operator.calls == [(set(), ""), ({"warning", "ODD"}, "strange")]
     assert [record.levelno for record in caplog.records] == [logging.INFO, logging.INFO]
     assert [record.message for record in caplog.records] == ["", "strange"]
+
+
+def test_report_exception_forwards_ui_message_and_active_traceback(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class FakeOperator:
+        def __init__(self) -> None:
+            self.calls: list[tuple[set[str], str]] = []
+
+        def report(self, level: set[str], message: str) -> None:
+            self.calls.append((level, message))
+
+    operator = FakeOperator()
+
+    with caplog.at_level(logging.ERROR, logger="quakeblend"):
+        try:
+            raise RuntimeError("broken brush")
+        except RuntimeError as exc:
+            qb_log.report_exception(operator, f"MAP import failed: {exc}")
+
+    assert operator.calls == [({"ERROR"}, "MAP import failed: broken brush")]
+    assert caplog.records[-1].name == "quakeblend"
+    assert caplog.records[-1].levelno == logging.ERROR
+    assert caplog.records[-1].message == "MAP import failed: broken brush"
+    assert "Traceback (most recent call last):" in caplog.text
+    assert 'raise RuntimeError("broken brush")' in caplog.text
+    assert "RuntimeError: broken brush" in caplog.text

@@ -231,15 +231,48 @@ def _check_transaction(extension_root: str) -> None:
 
 def _check_import_failure_rollback(extension_root: str, directory: Path) -> None:
     patch = importlib.import_module(f"{extension_root}.formats.patch")
+    runner = importlib.import_module(f"{extension_root}.blender.import_runner_map")
     original_tessellate = patch.tessellate
+    original_progress = runner.ImportProgress
+    progress_runs: list[list[tuple]] = []
+
+    class ProgressProbe:
+        def __init__(self) -> None:
+            self.events: list[tuple] = []
+            progress_runs.append(self.events)
+
+        def progress_begin(self, minimum: int, maximum: int) -> None:
+            self.events.append(("begin", minimum, maximum))
+
+        def progress_update(self, value: int) -> None:
+            self.events.append(("update", value))
+
+        def progress_end(self) -> None:
+            self.events.append(("end",))
+
+    class RecordingProgress(original_progress):
+        def __init__(self, _window_manager) -> None:
+            super().__init__(ProgressProbe())
 
     def fail_tessellation(*_args, **_kwargs):
         raise RuntimeError("intentional patch smoke failure")
 
+    success_path = directory / "smoke_progress_success.map"
+    success_path.write_text(_Q1_MAP, encoding="ascii")
     path = directory / "smoke_patch_failure.map"
     path.write_text(_Q3_PATCH_MAP, encoding="ascii")
-    patch.tessellate = fail_tessellation
+    runner.ImportProgress = RecordingProgress
     try:
+        assert bpy.ops.quakeblend.import_map(
+            filepath=str(success_path),
+            scale=0.25,
+            source_game="Q1",
+            wad_paths=";",
+            import_entities=True,
+        ) == {"FINISHED"}
+        assert len(_source_roots(success_path)) == 1
+
+        patch.tessellate = fail_tessellation
         try:
             result = bpy.ops.quakeblend.import_map(
                 filepath=str(path),
@@ -256,9 +289,18 @@ def _check_import_failure_rollback(extension_root: str, directory: Path) -> None
             result = {"CANCELLED"}
     finally:
         patch.tessellate = original_tessellate
+        runner.ImportProgress = original_progress
 
     assert result == {"CANCELLED"}
     assert _source_roots(path) == []
+    assert len(progress_runs) == 2
+    for events in progress_runs:
+        assert events[0] == ("begin", 0, 1000)
+        assert events[-1] == ("end",)
+        assert events.count(("end",)) == 1
+        assert all(0 <= event[1] <= 1000 for event in events if event[0] == "update")
+    success_updates = [event[1] for event in progress_runs[0] if event[0] == "update"]
+    assert success_updates[-1] == 1000
 
 
 def _collections_below(root: bpy.types.Collection) -> list[bpy.types.Collection]:
@@ -762,7 +804,8 @@ def _check_bsp_submodels(directory: Path) -> None:
     )
 
 
-def _check_bsp_and_wad_workflows(directory: Path) -> None:
+def _check_bsp_and_wad_workflows(extension_root: str, directory: Path) -> None:
+    path_utils = importlib.import_module(f"{extension_root}.utils.paths")
     bsp_specs = (
         ("q1", 29, 15, False),
         ("q2", 38, 19, True),
@@ -785,7 +828,15 @@ def _check_bsp_and_wad_workflows(directory: Path) -> None:
             patch_level=2,
         )
         assert result == {"FINISHED"}
-        assert any(collection.name.startswith(path.stem) for collection in bpy.data.collections)
+        roots = [
+            collection
+            for collection in bpy.data.collections
+            if collection.get("qb_source_bsp") == str(path.resolve())
+        ]
+        assert len(roots) == 1
+        root = roots[0]
+        assert root["qb_source_identity"] == path_utils.canonical_source_identity(path)
+        assert root["qb_source_game"] == name
 
     wad_path = directory / "smoke.wad"
     _write_wad(wad_path)
@@ -1242,6 +1293,340 @@ def _check_map_transform_export(extension_root: str, directory: Path) -> None:
         assert export(use_brush_transforms=True) == {"FINISHED"}
 
 
+def _check_replace_existing(extension_root: str, directory: Path) -> None:
+    transaction = importlib.import_module(
+        f"{extension_root}.blender.transaction"
+    )
+
+    def snapshot() -> dict[str, set[int]]:
+        return {
+            name: {
+                datablock.as_pointer()
+                for datablock in getattr(bpy.data, name)
+            }
+            for name in transaction._DATA_COLLECTIONS
+        }
+
+    def import_map(path: Path, **options) -> set[str]:
+        arguments = {
+            "filepath": str(path),
+            "source_game": "Q1",
+            "texture_root": str(directory),
+            "wad_paths": ";",
+            "import_entities": True,
+            "import_lights": True,
+            "patch_level": 2,
+        }
+        arguments.update(options)
+        return bpy.ops.quakeblend.import_map(**arguments)
+
+    def expect_cancel(operation, message: str) -> None:
+        try:
+            result = operation()
+        except RuntimeError as exc:
+            assert message in str(exc), exc
+        else:
+            assert result == {"CANCELLED"}
+
+    no_match_path = directory / "replace_no_match.map"
+    no_match_path.write_text(_Q1_MAP, encoding="ascii")
+    before = snapshot()
+    expect_cancel(
+        lambda: import_map(
+            no_match_path,
+            replace_existing=True,
+            create_materials=False,
+        ),
+        "no eligible MAP root",
+    )
+    assert snapshot() == before
+    assert _source_roots(no_match_path) == []
+
+    duplicate_path = directory / "replace_duplicates.map"
+    duplicate_path.write_text(_Q1_MAP, encoding="ascii")
+    assert import_map(duplicate_path, create_materials=False) == {"FINISHED"}
+    assert import_map(duplicate_path, create_materials=False) == {"FINISHED"}
+    duplicate_roots = _source_roots(duplicate_path)
+    assert len(duplicate_roots) == 2
+    duplicate_pointers = {root.as_pointer() for root in duplicate_roots}
+    before = snapshot()
+    expect_cancel(
+        lambda: import_map(
+            duplicate_path,
+            replace_existing=True,
+            create_materials=False,
+        ),
+        "2 eligible MAP roots",
+    )
+    assert snapshot() == before
+    assert {
+        root.as_pointer() for root in _source_roots(duplicate_path)
+    } == duplicate_pointers
+
+    wad_path = directory / "replace_assets.wad"
+    _write_wad(wad_path, texture="QB_REPLACE")
+    success_path = directory / "replace_success.map"
+    success_source = _Q1_MAP.replace("SMOKE", "QB_REPLACE")
+    success_path.write_text(success_source, encoding="ascii")
+    assert import_map(success_path, wad_paths=str(wad_path)) == {"FINISHED"}
+    old_root = _source_roots(success_path)[0]
+    old_root.name = "QB Preserved Import Name"
+    preserved_name = old_root.name
+    old_root_pointer = old_root.as_pointer()
+    old_objects = _objects_below(old_root)
+    textured = next(
+        obj for obj in old_objects
+        if obj.type == "MESH" and obj.data.materials
+    )
+    owned_node_group = bpy.data.node_groups.new(
+        "QB Replacement Owned Nodes",
+        "GeometryNodeTree",
+    )
+    owned_node_group.interface.new_socket(
+        name="Geometry",
+        in_out="INPUT",
+        socket_type="NodeSocketGeometry",
+    )
+    owned_node_group.interface.new_socket(
+        name="Geometry",
+        in_out="OUTPUT",
+        socket_type="NodeSocketGeometry",
+    )
+    modifier = textured.modifiers.new("QB Replacement Nodes", "NODES")
+    modifier.node_group = owned_node_group
+    owned_light = bpy.data.lights.new("QB Replacement Owned Light", "POINT")
+    light_object = bpy.data.objects.new("QB Replacement Light", owned_light)
+    old_root.objects.link(light_object)
+    owned_camera = bpy.data.cameras.new("QB Replacement Owned Camera")
+    camera_object = bpy.data.objects.new("QB Replacement Camera", owned_camera)
+    old_root.objects.link(camera_object)
+    owned_action = bpy.data.actions.new("QB Replacement Owned Action")
+    camera_object.animation_data_create()
+    camera_object.animation_data.action = owned_action
+
+    old_collection_pointers = {
+        collection.as_pointer() for collection in _collections_below(old_root)
+    }
+    old_objects = _objects_below(old_root)
+    old_object_pointers = {obj.as_pointer() for obj in old_objects}
+    old_mesh_pointers = {
+        obj.data.as_pointer() for obj in old_objects if obj.type == "MESH"
+    }
+    old_light_pointer = owned_light.as_pointer()
+    old_camera_pointer = owned_camera.as_pointer()
+    old_node_group_pointer = owned_node_group.as_pointer()
+    old_action_pointer = owned_action.as_pointer()
+    old_material_pointers = {
+        material.as_pointer() for material in textured.data.materials
+    }
+    old_image_pointers = {
+        node.image.as_pointer()
+        for material in textured.data.materials
+        for node in material.node_tree.nodes
+        if node.type == "TEX_IMAGE" and node.image is not None
+    }
+    assert old_material_pointers and old_image_pointers
+
+    success_path.write_text(
+        success_source.replace("smoke anchor", "replacement succeeded"),
+        encoding="ascii",
+    )
+    assert import_map(
+        success_path,
+        replace_existing=True,
+        wad_paths=str(wad_path),
+    ) == {"FINISHED"}
+    replacement_roots = _source_roots(success_path)
+    assert len(replacement_roots) == 1
+    replacement_root = replacement_roots[0]
+    assert replacement_root.as_pointer() != old_root_pointer
+    assert replacement_root.name == preserved_name
+    assert old_collection_pointers.isdisjoint(
+        collection.as_pointer() for collection in bpy.data.collections
+    )
+    assert old_object_pointers.isdisjoint(
+        obj.as_pointer() for obj in bpy.data.objects
+    )
+    assert old_mesh_pointers.isdisjoint(
+        mesh.as_pointer() for mesh in bpy.data.meshes
+    )
+    assert old_light_pointer not in {
+        light.as_pointer() for light in bpy.data.lights
+    }
+    assert old_camera_pointer not in {
+        camera.as_pointer() for camera in bpy.data.cameras
+    }
+    assert old_node_group_pointer not in {
+        node_group.as_pointer() for node_group in bpy.data.node_groups
+    }
+    assert old_action_pointer not in {
+        action.as_pointer() for action in bpy.data.actions
+    }
+    replacement_objects = _objects_below(replacement_root)
+    replacement_textured = next(
+        obj for obj in replacement_objects
+        if obj.type == "MESH" and obj.data.materials
+    )
+    assert {
+        material.as_pointer()
+        for material in replacement_textured.data.materials
+    } == old_material_pointers
+    assert old_material_pointers.issubset(
+        material.as_pointer() for material in bpy.data.materials
+    )
+    assert old_image_pointers.issubset(
+        image.as_pointer() for image in bpy.data.images
+    )
+    replacement_anchor = next(
+        obj for obj in replacement_objects
+        if obj.get("qb_prop_message")
+    )
+    assert replacement_anchor["qb_prop_message"] == "replacement succeeded"
+
+    merged_path = directory / "replace_merged.map"
+    merged_path.write_text(_Q1_MAP, encoding="ascii")
+    assert import_map(
+        merged_path,
+        geometry_mode="MERGED_WORLD",
+        create_materials=False,
+    ) == {"FINISHED"}
+    merged_root = _source_roots(merged_path)[0]
+    merged_root.name = "QB Merged Replacement Root"
+    merged_pointer = merged_root.as_pointer()
+    assert import_map(
+        merged_path,
+        geometry_mode="MERGED_WORLD",
+        create_materials=False,
+        replace_existing=True,
+    ) == {"FINISHED"}
+    merged_roots = _source_roots(merged_path)
+    assert len(merged_roots) == 1
+    merged_root = merged_roots[0]
+    assert merged_root.as_pointer() != merged_pointer
+    assert merged_root.name == "QB Merged Replacement Root"
+    assert merged_root["qb_geometry_mode"] == "MERGED_WORLD"
+    scene_export = importlib.import_module(
+        f"{extension_root}.blender.map_scene_export"
+    )
+    try:
+        scene_export.require_per_brush_geometry(merged_root)
+    except ValueError as exc:
+        assert "Merged World imports cannot use brush transform export" in str(exc)
+    else:
+        raise AssertionError("Merged replacement enabled brush transform export")
+
+    rollback_path = directory / "replace_rollback.map"
+    rollback_path.write_text(_Q3_PATCH_MAP, encoding="ascii")
+    assert import_map(
+        rollback_path,
+        source_game="Q3",
+        create_materials=False,
+    ) == {"FINISHED"}
+    rollback_root = _source_roots(rollback_path)[0]
+    rollback_root.name = "QB Rollback Root"
+    rollback_pointer = rollback_root.as_pointer()
+    rollback_name = rollback_root.name
+
+    rollback_path.write_text('{\n"classname" "worldspawn"\n', encoding="ascii")
+    before = snapshot()
+    expect_cancel(
+        lambda: import_map(
+            rollback_path,
+            source_game="Q3",
+            create_materials=False,
+            replace_existing=True,
+        ),
+        "MAP import failed",
+    )
+    assert snapshot() == before
+    assert len(_source_roots(rollback_path)) == 1
+    assert _source_roots(rollback_path)[0].as_pointer() == rollback_pointer
+    assert _source_roots(rollback_path)[0].name == rollback_name
+
+    rollback_path.write_text(_Q3_PATCH_MAP, encoding="ascii")
+    patch = importlib.import_module(f"{extension_root}.formats.patch")
+    original_tessellate = patch.tessellate
+
+    def fail_after_allocation(*_args, **_kwargs):
+        raise RuntimeError("intentional replacement rollback")
+
+    patch.tessellate = fail_after_allocation
+    before = snapshot()
+    try:
+        expect_cancel(
+            lambda: import_map(
+                rollback_path,
+                source_game="Q3",
+                create_materials=False,
+                replace_existing=True,
+            ),
+            "intentional replacement rollback",
+        )
+    finally:
+        patch.tessellate = original_tessellate
+    assert snapshot() == before
+    assert len(_source_roots(rollback_path)) == 1
+    assert _source_roots(rollback_path)[0].as_pointer() == rollback_pointer
+    assert _source_roots(rollback_path)[0].name == rollback_name
+
+    bsp_specs = (
+        ("q1", 29, 15, False),
+        ("q2", 38, 19, True),
+        ("q3", 46, 17, True),
+    )
+    for game, version, lump_count, ibsp in bsp_specs:
+        path = directory / f"replace_{game}.bsp"
+        _write_empty_bsp(
+            path,
+            version=version,
+            lump_count=lump_count,
+            ibsp=ibsp,
+        )
+        arguments = {
+            "filepath": str(path),
+            "create_materials": False,
+            "import_entities": False,
+        }
+        assert bpy.ops.quakeblend.import_bsp(**arguments) == {"FINISHED"}
+        roots = [
+            root for root in bpy.data.collections
+            if root.get("qb_source_bsp") == str(path.resolve())
+        ]
+        assert len(roots) == 1
+        roots[0].name = f"QB {game.upper()} Preserved Root"
+        old_pointer = roots[0].as_pointer()
+        old_name = roots[0].name
+        assert bpy.ops.quakeblend.import_bsp(
+            **arguments,
+            replace_existing=True,
+        ) == {"FINISHED"}
+        roots = [
+            root for root in bpy.data.collections
+            if root.get("qb_source_bsp") == str(path.resolve())
+        ]
+        assert len(roots) == 1
+        assert roots[0].as_pointer() != old_pointer
+        assert roots[0].name == old_name
+        assert roots[0]["qb_source_game"] == game
+
+    goldsrc_path = directory / "replace_goldsrc.bsp"
+    _write_goldsrc_bsp(goldsrc_path)
+    before = snapshot()
+    expect_cancel(
+        lambda: bpy.ops.quakeblend.import_bsp(
+            filepath=str(goldsrc_path),
+            create_materials=False,
+            replace_existing=True,
+        ),
+        "not supported for GoldSrc",
+    )
+    assert snapshot() == before
+    assert not any(
+        root.get("qb_source_bsp") == str(goldsrc_path.resolve())
+        for root in bpy.data.collections
+    )
+
+
 def _check_unregister(extension_root: str) -> None:
     module = importlib.import_module(extension_root)
     rna_identifiers = (
@@ -1268,18 +1653,19 @@ def main() -> None:
         _check_map_workflows(args.extension_root, directory)
         _check_import_failure_rollback(args.extension_root, directory)
         _check_texture_case_and_face_flags(directory)
-        _check_bsp_and_wad_workflows(directory)
+        _check_bsp_and_wad_workflows(args.extension_root, directory)
         _check_wad3_palettes(directory)
         _check_cameras(args.extension_root, directory)
         _check_bsp_submodels(directory)
         _check_bsp_import_controls(directory)
+        _check_replace_existing(args.extension_root, directory)
         _check_goldsrc(directory)
         _check_goldsrc_stitching(args.extension_root, directory)
         _check_map_transform_export(args.extension_root, directory)
     _check_unregister(args.extension_root)
     print(
         "QUAKEBLEND_SMOKE_OK registration materials transaction "
-        "map rollback textures bsp submodels wad export unregister"
+        "map progress rollback replacement textures bsp submodels wad export unregister"
     )
 
 

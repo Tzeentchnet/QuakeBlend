@@ -213,6 +213,14 @@ class EXPORT_OT_quake_map(bpy.types.Operator, ExportHelper):
             return {"CANCELLED"}
         source_game: str = coll.get("qb_source_game", "q1")
 
+        if self.use_brush_transforms:
+            from . import map_scene_export
+            try:
+                map_scene_export.require_per_brush_geometry(coll)
+            except (ValueError, KeyError, TypeError) as exc:
+                self.report({"ERROR"}, f"Brush transform export rejected: {exc}")
+                return {"CANCELLED"}
+
         target = self.target_game.lower() if self.target_game != "AUTO" else source_game
         if target not in ("q1", "q2", "q3"):
             self.report({"ERROR"}, f"Invalid target game {target!r}")
@@ -225,9 +233,7 @@ class EXPORT_OT_quake_map(bpy.types.Operator, ExportHelper):
         except (OSError, ValueError) as exc:
             self.report({"ERROR"}, f"Failed to re-parse source MAP: {exc}")
             return {"CANCELLED"}
-
         if self.use_brush_transforms:
-            from . import map_scene_export
             try:
                 if source_game not in ("q1", "q2") or target != source_game or self.projection != "VALVE220":
                     raise ValueError("Brush transforms require same-game Q1/Q2 output and explicit Valve220 projection")

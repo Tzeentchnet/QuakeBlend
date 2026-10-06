@@ -17,6 +17,10 @@ LIGHTING_ITEMS = (
     ("RELIT", "Blender Lighting", "Use scene lighting without baked shading; retain shader glow"),
     ("BAKED", "Baked", "Use compiled Q3 lightmaps and vertex shading"),
 )
+MAP_GEOMETRY_ITEMS = (
+    ("PER_BRUSH", "Per Brush", "Create one mesh object for each MAP brush"),
+    ("MERGED_WORLD", "Merged World", "Merge worldspawn standard brushes; keep brush entities and patches separate"),
+)
 
 
 def is_trigger(properties):
@@ -27,6 +31,7 @@ def is_trigger(properties):
 class ImportOptions:
     worldspawn_only: bool = False
     group_entities: bool = True
+    geometry_mode: str = "PER_BRUSH"
     create_materials: bool = True
     import_brush_entities: bool = True
     import_entities: bool = True
@@ -46,6 +51,8 @@ class ImportOptions:
         for name in ("trigger_handling", "clip_handling", "hint_handling"):
             if values[name] not in {"VISIBLE", "HIDDEN", "SKIP"}:
                 raise ValueError(f"Invalid {name}: {values[name]}")
+        if values["geometry_mode"] not in {"PER_BRUSH", "MERGED_WORLD"}:
+            raise ValueError(f"Invalid geometry mode: {values['geometry_mode']}")
         if values["q3_lighting"] not in {"FULLBRIGHT", "RELIT", "BAKED"}:
             raise ValueError(f"Invalid lighting mode: {values['q3_lighting']}")
         if not bsp and values["q3_lighting"] == "BAKED":

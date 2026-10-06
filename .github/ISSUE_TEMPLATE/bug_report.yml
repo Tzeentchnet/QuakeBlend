@@ -1,0 +1,73 @@
+name: Bug report
+description: Report a reproducible problem with QuakeBlend
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a QuakeBlend bug.
+
+  - type: input
+    id: quakeblend-version
+    attributes:
+      label: QuakeBlend version
+      placeholder: "1.3.0"
+    validations:
+      required: true
+
+  - type: input
+    id: blender-version
+    attributes:
+      label: Blender version
+      placeholder: "5.0.0"
+    validations:
+      required: true
+
+  - type: input
+    id: operating-system
+    attributes:
+      label: Operating system
+      placeholder: "Windows 11, macOS 15, Ubuntu 24.04, etc."
+    validations:
+      required: true
+
+  - type: input
+    id: game-format
+    attributes:
+      label: Game and format
+      description: Identify the game and file format involved.
+      placeholder: "Quake 1 MAP, Quake 2 BSP, Quake 3 MAP, etc."
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction-steps
+    attributes:
+      label: Reproduction steps
+      description: List the exact steps needed to reproduce the problem.
+      placeholder: |
+        1. Open ...
+        2. Import ...
+        3. Observe ...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: official-release-zip
+    attributes:
+      label: Did you use the official release ZIP?
+      options:
+        - "Yes"
+        - "No"
+        - "Not sure"
+    validations:
+      required: true
+
+  - type: textarea
+    id: console-log
+    attributes:
+      label: Complete console log or traceback
+      description: Paste the complete console output or traceback, not only the final error line.
+      render: text
+    validations:
+      required: true

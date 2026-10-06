@@ -29,3 +29,34 @@ def test_pure_layers_do_not_import_blender_modules() -> None:
                     )
 
     assert violations == []
+
+
+def test_runtime_modules_use_relative_package_imports() -> None:
+    violations: list[str] = []
+    for path in Path("quakeblend").rglob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                imported = [
+                    alias.name
+                    for alias in node.names
+                    if alias.name == "quakeblend"
+                    or alias.name.startswith("quakeblend.")
+                ]
+            elif (
+                isinstance(node, ast.ImportFrom)
+                and node.level == 0
+                and node.module
+                and (
+                    node.module == "quakeblend"
+                    or node.module.startswith("quakeblend.")
+                )
+            ):
+                imported = [node.module]
+            else:
+                continue
+
+            for module in imported:
+                violations.append(f"{path}:{node.lineno} imports {module}")
+
+    assert violations == []
